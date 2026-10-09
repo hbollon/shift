@@ -1,0 +1,12 @@
+{
+  "bar": {
+    "tooltip": "Shift"
+  },
+  "dashboard": {
+    "title": "Shift",
+    "placeholder": "Work-hours tracking is on its way."
+  },
+  "tile": {
+    "label": "Shift"
+  }
+}

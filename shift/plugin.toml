@@ -1,0 +1,39 @@
+# Shift — work-hours tracker for Noctalia.
+# Design: docs/specs/0001-shift-v1.md (repository root).
+#
+# core      -> headless service, single source of truth (state, signals, persistence)
+# bar       -> bar widget, thin client of the core snapshot
+# dashboard -> panel, thin client: dashboard, history and editors
+# tile      -> control-center shortcut, check in / check out
+
+id           = "hbollon/shift"
+name         = "Shift"
+version      = "0.0.1"
+plugin_api   = 32
+author       = "hbollon"
+license      = "MIT"
+icon         = "briefcase"
+description  = "Track your work hours: one-click check in/out, smart automation, daily target and overtime balance."
+tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
+dependencies = []
+
+[[service]]
+id    = "core"
+entry = "core.luau"
+
+[[widget]]
+id    = "bar"
+entry = "bar.luau"
+
+[[panel]]
+id              = "dashboard"
+entry           = "dashboard.luau"
+width           = 400
+height          = 620
+placement       = "attached"
+position        = "auto"
+open_near_click = true
+
+[[shortcut]]
+id    = "tile"
+entry = "tile.luau"
