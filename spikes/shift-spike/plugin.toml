@@ -1,0 +1,102 @@
+# M0 throwaway spike plugin for Shift. Validates the risky platform assumptions of
+# docs/specs/0001-shift-v1.md §16 (S1–S5). Not shipped; see docs/spikes/.
+
+id = "hbollon/shift-spike"
+name = "Shift Spike"
+version = "0.0.1"
+plugin_api = 32
+author = "hbollon"
+license = "MIT"
+icon = "flask"
+description = "M0 spikes for Shift (swayidle, logind, SVG ring, settings UX, state channel)."
+tags = ["demo"]
+dependencies = ["swayidle"]
+
+# --- S4: settings shapes planned by the spec ---------------------------------
+
+[[setting]]
+key = "automation"
+type = "select"
+label_key = "settings.automation.label"
+description_key = "settings.automation.description"
+default = "assisted"
+options = [
+  { value = "manual", label_key = "settings.automation.manual" },
+  { value = "assisted", label_key = "settings.automation.assisted" },
+  { value = "automatic", label_key = "settings.automation.automatic" },
+  { value = "custom", label_key = "settings.automation.custom" },
+]
+
+[[setting]]
+key = "schedule_rules"
+type = "string_list"
+label_key = "settings.schedule_rules.label"
+description_key = "settings.schedule_rules.description"
+default = ["+ mon-fri 08:00-19:00", "- holidays"]
+visible_when = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key = "idle_action"
+type = "select"
+label_key = "settings.idle_action.label"
+default = "ask"
+visible_when = { key = "automation", values = ["custom"] }
+options = [
+  { value = "ignore", label_key = "settings.action.ignore" },
+  { value = "ask", label_key = "settings.action.ask" },
+  { value = "deduct", label_key = "settings.action.deduct" },
+  { value = "checkout", label_key = "settings.action.checkout" },
+]
+
+[[setting]]
+key = "work_week"
+type = "select"
+label_key = "settings.work_week.label"
+default = "mon_fri"
+options = [
+  { value = "mon_fri", label_key = "settings.work_week.mon_fri" },
+  { value = "mon_sat", label_key = "settings.work_week.mon_sat" },
+  { value = "custom", label_key = "settings.work_week.custom" },
+]
+
+[[setting]]
+key = "workday_mon"
+type = "bool"
+label_key = "settings.workday_mon.label"
+default = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key = "workday_sat"
+type = "bool"
+label_key = "settings.workday_sat.label"
+default = false
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key = "idle_timeout_s"
+type = "int"
+label_key = "settings.idle_timeout_s.label"
+default = 5
+min = 1
+max = 7200
+advanced = true
+
+# --- Entries -----------------------------------------------------------------
+
+[[service]]
+id = "core"
+entry = "core.luau"
+
+[[widget]]
+id = "bar"
+entry = "bar.luau"
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 400
+height = 620
+placement = "attached"
+position = "auto"
+open_near_click = true

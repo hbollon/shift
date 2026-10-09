@@ -1,0 +1,22 @@
+{
+  "settings.automation.label": "Automation",
+  "settings.automation.description": "How much Shift does on its own.",
+  "settings.automation.manual": "Manual",
+  "settings.automation.assisted": "Assisted",
+  "settings.automation.automatic": "Automatic",
+  "settings.automation.custom": "Custom",
+  "settings.schedule_rules.label": "Schedule rules",
+  "settings.schedule_rules.description": "One rule per line, e.g. '+ mon-fri 08:00-19:00', '- * 12:00-13:30', '- holidays'.",
+  "settings.idle_action.label": "When idle",
+  "settings.action.ignore": "Ignore",
+  "settings.action.ask": "Ask",
+  "settings.action.deduct": "Deduct",
+  "settings.action.checkout": "Check out",
+  "settings.work_week.label": "Work week",
+  "settings.work_week.mon_fri": "Monday – Friday",
+  "settings.work_week.mon_sat": "Monday – Saturday",
+  "settings.work_week.custom": "Custom",
+  "settings.workday_mon.label": "Monday",
+  "settings.workday_sat.label": "Saturday",
+  "settings.idle_timeout_s.label": "Idle timeout (seconds, spike)"
+}
