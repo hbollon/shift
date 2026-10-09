@@ -1,0 +1,15 @@
+# Editor settings stay local (see CONTRIBUTING.md for luau-lsp)
+/.vscode/
+
+# Pinned toolchain installed by scripts/install-tools.sh
+/.tools/
+
+# Build output (test mirror, store validation sandbox)
+/build/
+
+# Editor type definitions, fetched by scripts/install-tools.sh
+noctalia.d.luau
+
+*.log
+*.tmp
+.DS_Store
