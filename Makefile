@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 LUAU_LSP := .tools/bin/luau-lsp
 LUAU_SOURCES = $(shell find shift tests -name '*.luau')
 
-.PHONY: help tools test analyze lint validate check clean
+.PHONY: help tools test analyze lint validate catalog catalog-check check clean
 
 # Keep output readable even with a global `make -j`.
 .NOTPARALLEL:
@@ -30,7 +30,13 @@ lint: ## Cross-check declared settings against code (needs a local Noctalia)
 validate: tools ## Run the community-plugins store validator
 	@scripts/validate-store.sh
 
-check: test analyze validate lint ## Run every check (what CI runs, plus lint)
+catalog: ## Regenerate catalog.toml from shift/plugin.toml
+	@scripts/catalog.py
+
+catalog-check: ## Fail if catalog.toml is out of date
+	@scripts/catalog.py --check
+
+check: test analyze validate catalog-check lint ## Run every check (what CI runs, plus lint)
 
 clean: ## Remove build output
 	@rm -rf build
