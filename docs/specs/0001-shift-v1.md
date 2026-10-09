@@ -1013,10 +1013,13 @@ listener {
 ```
 shift/                          # this repository (also usable as a Noctalia git source)
 ├── README.md                   # GitHub landing page
+├── CONTRIBUTING.md             # setup, checks, conventions
 ├── LICENSE                     # MIT
-├── catalog.toml                # lets users add this repo as a source before store publication
+├── Makefile                    # tools, test, analyze, validate, catalog, check
+├── catalog.toml                # generated from shift/plugin.toml (scripts/catalog.py)
 ├── docs/
-│   └── specs/0001-shift-v1.md
+│   ├── specs/0001-shift-v1.md
+│   └── spikes/                 # platform validation reports
 ├── shift/                      # the plugin — mirrors the community-plugins layout
 │   ├── plugin.toml
 │   ├── core.luau  bar.luau  dashboard.luau  tile.luau
@@ -1024,9 +1027,11 @@ shift/                          # this repository (also usable as a Noctalia git
 │   ├── translations/en.json
 │   ├── README.md               # plugin page (follows community README_TEMPLATE.md)
 │   └── thumbnail.webp          # 960×540, from the official thumbnail generator
-├── tests/                      # luau unit tests for pure modules (+ fake host)
+├── tests/                      # *.spec.luau unit tests, testing framework, fake host
+├── scripts/                    # pinned toolchain install, test runner, store validation, catalog
+├── spikes/shift-spike/         # throwaway spike plugin (not shipped)
 ├── .luaurc                     # nonstrict, matching community-plugins
-└── .github/workflows/ci.yml    # luau tests, luau-analyze, manifest/translation checks
+└── .github/workflows/ci.yml    # tests, static analysis, store validation, catalog check
 ```
 
 **Manifest sketch**
@@ -1071,9 +1076,14 @@ entry = "tile.luau"
 declared settings against code.
 
 **Testing**
-- Unit: `luau` CLI runs `tests/*.spec.luau` against the pure modules. The automation reducer gets table-driven
-  scenarios with a fake clock (all edge cases in §12 that are reducer-level).
-- Static: `luau-analyze` with `noctalia.d.luau` (fetched in CI, not committed).
+- Toolchain: `make tools` installs pinned, checksum-verified versions of the `luau` CLI, `luau-lsp`,
+  `noctalia.d.luau` and the community-plugins validator into `.tools/` (identical locally and in CI).
+- Unit: the `luau` CLI runs `tests/**/*.spec.luau` against the pure modules, through a mirror in `build/test` where
+  `require("./x.luau")` is rewritten to `require("./x")` (the CLI rejects extensions that Noctalia requires). The
+  automation reducer gets table-driven scenarios with the fake host's clock (all edge cases in §12 that are
+  reducer-level).
+- Static: `luau-lsp analyze` with the `noctalia.d.luau` definitions (`luau-analyze` cannot load definition files).
+- Store: the pinned community-plugins validator runs on a copy of `shift/` laid out like the store repository.
 - Integration: an IPC-driven script (`signal`, `checkin`, …) on a live Noctalia with a temporary
   `NOCTALIA_STATE_HOME`.
 - Manual QA checklist: themes (light/dark/custom), horizontal/vertical bars, multi-monitor, suspend/resume,
