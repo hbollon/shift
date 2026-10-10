@@ -1089,7 +1089,7 @@ declared settings against code.
 - Manual QA checklist: themes (light/dark/custom), horizontal/vertical bars, multi-monitor, suspend/resume,
   lock/unlock, offline.
 
-**Distribution** (from v0.1.0, end of M6 — D26)
+**Distribution** (from v0.1.0, end of M7 — D26)
 1. GitHub releases from this repo (semver, changelog). Users can add it as a git source.
 2. Store: at the same time, a PR copying `shift/` into `noctalia-dev/community-plugins`, with screenshots/video and a
    list of every network call, file write and spawned process. Later versions follow the same PR flow.
@@ -1104,7 +1104,8 @@ declared settings against code.
 | **M3 — Panel & tile** | Panel header/hero/tiles/Today tab, ring SVG, undo, cc tile, onboarding | Full manual workflow from the panel; theme parity checked |
 | **M4 — Automation** | Rules DSL + preview, idle/logind/gap signals, absences + resolution, presets, rollover | All §12 reducer scenarios pass; live tests on suspend/lock/idle |
 | **M5 — History & balance** | Week/month views, day editor, missing-day review, day off, adjustments, contract history, holidays | Past-day editing round-trips; balance matches a hand-computed fixture |
-| **M6 — Polish & release** | Notifications (§6.9), microcopy pass, a11y pass, README, thumbnail, v0.1.0 GitHub release, community-plugins PR | Community-plugins checklist satisfied; PR opened |
+| **M6 — Backups** | Full daily backups (§10.1), retention pruning, backup before migrations, restore of a corrupt file from the latest backup (§10.3) | Backup taken on the first tick of a workday; retention verified on a fixture; a corrupt file is restored from the latest backup |
+| **M7 — Polish & release** | Notifications (§6.9), microcopy pass, a11y pass, README, thumbnail, v0.1.0 GitHub release, community-plugins PR | Community-plugins checklist satisfied; PR opened |
 
 ## 16. Risks and technical spikes
 
