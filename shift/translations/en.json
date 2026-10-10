@@ -1,6 +1,21 @@
 {
+  "status": {
+    "working": "Working",
+    "working_since": "Working since {time}",
+    "off": "Off",
+    "off_since": "Off since {time}"
+  },
   "bar": {
-    "tooltip": "Shift"
+    "waiting": "Shift is starting…",
+    "tooltip": {
+      "status": "Status",
+      "today": "Today",
+      "remaining": "Remaining",
+      "overtime": "Overtime",
+      "week": "This week",
+      "of_target": "{worked} / {target}",
+      "remaining_eta": "{remaining} (until ~{time})"
+    }
   },
   "dashboard": {
     "title": "Shift",
@@ -55,6 +70,10 @@
     }
   },
   "errors": {
+    "command": {
+      "title": "Shift did not respond",
+      "body": "Your action did not reach the Shift service. Try again, or disable and re-enable the plugin."
+    },
     "overlap": {
       "title": "Session not recorded",
       "body": "It overlaps a session that is already recorded, probably because the system clock changed."
