@@ -2,11 +2,14 @@
 -- In-memory stand-in for the `noctalia` host API, for tests running under the Luau CLI.
 -- It mirrors the method names of `noctalia.*` so modules that receive a host can be
 -- driven deterministically: a controllable clock, synchronous shared state, an
--- in-memory filesystem, declared settings, and captured logs/notifications.
+-- in-memory filesystem, declared settings, JSON, and captured logs/notifications.
 --
 --   local FakeHost = require("./lib/fake_host.luau")
 --   local host = FakeHost.new({ nowMs = 1791529020000, config = { weekly_hours = 35 } })
 --   host.clock.advance(60 * 1000)
+
+local Json = require("./json.luau")
+local Types = require("../../shift/lib/types.luau")
 
 local FakeHost = {}
 
@@ -16,12 +19,17 @@ function FakeHost.new(options)
   local config = options.config or {}
   local translations = options.translations or {}
   local dataDir = options.dataDir or "/data"
+  local timeFormat = options.timeFormat or "{:%H:%M}"
 
   local host = {
     logs = {},
     notifications = {},
     files = {},
   }
+
+  host.json = Json
+  host.updateIntervalMs = nil
+  host.toggledPanels = {}
 
   -- Clock -------------------------------------------------------------------
 
@@ -36,6 +44,16 @@ function FakeHost.new(options)
 
   function host.nowMs()
     return now
+  end
+
+  -- Local time comes from the process timezone (the test runner pins TZ).
+  function host.formatTime(pattern, unixSeconds)
+    local strftime = string.match(pattern, "^{:(.*)}$") or pattern
+    return os.date(strftime, unixSeconds or now // 1000)
+  end
+
+  function host.timeFormat()
+    return timeFormat
   end
 
   -- Shared state (delivered synchronously, every set fires, like the host) -----
@@ -136,6 +154,16 @@ function FakeHost.new(options)
     return names
   end
 
+  -- Entry runtime ---------------------------------------------------------------
+
+  function host.setUpdateInterval(ms)
+    host.updateIntervalMs = ms
+  end
+
+  function host.togglePanel(panelId)
+    table.insert(host.toggledPanels, panelId)
+  end
+
   -- Logs, notifications, translations -------------------------------------------
 
   function host.log(message)
@@ -161,6 +189,8 @@ function FakeHost.new(options)
     return text
   end
 
+  -- Compile-time check (make analyze) that the fake keeps up with the real adapter.
+  local _: Types.Host = host
   return host
 end
 

@@ -52,7 +52,7 @@ Noctalia may send its log to `/dev/null` when started by the compositor; run it 
 ```sh
 make check   # everything below, in order
 make test    # Luau unit tests (FILTER=name to run matching spec files)
-make analyze # luau-lsp type-check and lint with the Noctalia definitions
+make analyze # luau-lsp type-check with the Noctalia definitions, host adapter check
 make validate # community-plugins store validator on shift/
 make catalog-check # catalog.toml mirrors shift/plugin.toml (regenerate with `make catalog`)
 make lint    # `noctalia plugins lint` (local only, needs Noctalia)
@@ -72,7 +72,7 @@ shift/              the plugin, laid out exactly as in community-plugins
   tile.luau         [[shortcut]] — control-center tile
   lib/              shared modules (pure logic first)
   translations/en.json
-tests/              *.spec.luau unit tests, lib/testing.luau, lib/fake_host.luau
+tests/              *.spec.luau unit tests, lib/testing.luau, lib/fake_host.luau, lib/json.luau
 scripts/            toolchain, test runner, store validation, catalog generation
 docs/specs/         specifications
 docs/spikes/        platform validation reports
@@ -84,8 +84,14 @@ spikes/             throwaway spike plugin (not shipped)
 - Every `.luau` file starts with `--!nonstrict`, matching community-plugins.
 - `require` uses relative paths **with** the extension: `require("./lib/time.luau")` (Noctalia requires it; the test
   runner strips it for the Luau CLI).
-- Keep logic in pure modules that receive the host as a parameter instead of reading the `noctalia` global, so they
-  are testable with `tests/lib/fake_host.luau`. Entry scripts stay thin.
+- Only `shift/lib/host.luau` touches the `noctalia` global; entries and modules use the adapter it returns
+  (`make analyze` enforces it). The rendering globals of each entry type (`ui`, `barWidget`, `panel`, `shortcut`)
+  are used directly, and only in the entry files.
+- Keep logic in pure modules that receive the host as a parameter, so they are testable with
+  `tests/lib/fake_host.luau`. Entry scripts stay thin.
+- Shared domain types (persisted documents, snapshot, commands, host adapter) live in `shift/lib/types.luau`.
+  Annotate the parameters and return types of every public module function and of values crossing entries; files
+  stay `--!nonstrict`, so annotated code is checked by `make analyze` and the rest is inferred.
 - Colors are palette roles only (`primary`, `on_surface_variant/0.6`, …) — never hex values in UI code.
 - Every user-facing string goes through `noctalia.tr` / `noctalia.trp`. Add keys to `translations/en.json` only, as
   nested objects (no dotted keys); other languages come from [Noctalia Translate](https://i18n.noctalia.dev).
@@ -111,6 +117,8 @@ t.finish()
 ```
 
 Matchers: `toBe`, `toEqual` (deep), `toBeNil`, `toBeTruthy`, `toBeFalsy`, `toThrow(pattern?)`.
+
+The runner sets `TZ=Europe/Paris`, so calendar and DST tests are deterministic on any machine.
 
 ## Commits and pull requests
 

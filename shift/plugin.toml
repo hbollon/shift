@@ -17,6 +17,102 @@ description  = "Track your work hours: one-click check in/out, smart automation,
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
 dependencies = []
 
+# --- Settings ------------------------------------------------------------------
+
+[[setting]]
+key             = "weekly_hours"
+type            = "double"
+label_key       = "settings.weekly_hours.label"
+description_key = "settings.weekly_hours.description"
+default         = 35
+min             = 0
+max             = 100
+
+[[setting]]
+key             = "work_week"
+type            = "select"
+label_key       = "settings.work_week.label"
+description_key = "settings.work_week.description"
+default         = "mon_fri"
+options = [
+  { value = "mon_fri", label_key = "settings.work_week.mon_fri" },
+  { value = "mon_sat", label_key = "settings.work_week.mon_sat" },
+  { value = "custom", label_key = "settings.work_week.custom" },
+]
+
+[[setting]]
+key          = "workday_mon"
+type         = "bool"
+label_key    = "settings.workday_mon.label"
+default      = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_tue"
+type         = "bool"
+label_key    = "settings.workday_tue.label"
+default      = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_wed"
+type         = "bool"
+label_key    = "settings.workday_wed.label"
+default      = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_thu"
+type         = "bool"
+label_key    = "settings.workday_thu.label"
+default      = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_fri"
+type         = "bool"
+label_key    = "settings.workday_fri.label"
+default      = true
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_sat"
+type         = "bool"
+label_key    = "settings.workday_sat.label"
+default      = false
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key          = "workday_sun"
+type         = "bool"
+label_key    = "settings.workday_sun.label"
+default      = false
+visible_when = { key = "work_week", values = ["custom"] }
+
+[[setting]]
+key             = "day_start_hour"
+type            = "int"
+label_key       = "settings.day_start_hour.label"
+description_key = "settings.day_start_hour.description"
+default         = 4
+min             = 0
+max             = 12
+advanced        = true
+
+[[setting]]
+key             = "duration_format"
+type            = "select"
+label_key       = "settings.duration_format.label"
+description_key = "settings.duration_format.description"
+default         = "colon"
+options = [
+  { value = "colon", label_key = "settings.duration_format.colon" },
+  { value = "units", label_key = "settings.duration_format.units" },
+  { value = "decimal", label_key = "settings.duration_format.decimal" },
+]
+
+# --- Entries -------------------------------------------------------------------
+
 [[service]]
 id    = "core"
 entry = "core.luau"

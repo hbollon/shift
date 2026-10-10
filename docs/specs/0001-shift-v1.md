@@ -796,6 +796,7 @@ unit-testable with the standalone `luau` CLI.
 | `lib/signals/idle.luau` | – | swayidle stream lifecycle, external backend |
 | `lib/signals/logind.luau` | – | Session path resolution, gdbus monitor parsing, loginctl polling fallback |
 | `lib/holidays.luau` | – | Fetch, cache, region filter |
+| `lib/commands.luau` | – | UI → service command channel: senders with retry, receiver with at-most-once handling and acknowledgements (§9.3) |
 | `lib/host.luau` | – | Thin adapter over `noctalia.*` (C10) |
 | `lib/ui/*.luau` | – | Shared components: ring, chips, stat tile, card, bar chart, timeline, inputs |
 | `lib/format.luau` | ✓ | Duration/time display according to settings |
@@ -821,7 +822,7 @@ deterministic and fully testable with a fake clock.
     targetMs = 25200000,
     isWorkday = true, holiday = nil,
   },
-  week = { workedMs = 101400000, targetMs = 126000000 },
+  week = { workedMs = 101400000, targetMs = 126000000 }, -- closed sessions; UIs add the open one
   balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
   pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } },
   suggestion = nil,            -- "checkin" | "checkout"
@@ -832,29 +833,36 @@ deterministic and fully testable with a fake clock.
     ruleErrors = {}, windowSummary = "Mon–Fri 08:00–19:00",
   },
   flags = { firstRun = false, needsReview = { "2026-10-07" } },
+  display = { durationFormat = "colon" }, -- settings the UIs need to render
 }
 ```
 
 History data for the panel is requested on demand (`shift.cmd` `history.get {from, to}`) and answered on
 `shift.history` to keep the snapshot small.
 
-**`shift.cmd.<from>`** (UIs → service). Each sender writes its own key (`shift.cmd.bar.DP-1`, `shift.cmd.dashboard`,
-`shift.cmd.tile`) holding the list of its **unacknowledged** commands, each with a per-sender increasing `seq`:
+**`shift.cmd`** (UIs → service). Every UI runtime is a sender with a unique id `from` (entry kind, load time
+and a random number, e.g. `bar.19a1208aa73b-5f3a9c`, so two bar widgets or a reloaded widget never collide). A sender publishes the list of its
+**unacknowledged** commands, numbered with an increasing `seq`, as `{ from, cmds }`:
 
 ```lua
-{ { seq = 42, type = "checkout" } }
-{ { seq = 43, type = "absence.resolve", id = "a_8f2c", keep = false } }
-{ { seq = 44, type = "day.save", date = "2026-10-08", sessions = { … }, absences = { … } } }
-{ { seq = 45, type = "adjust.add", date = "2026-10-09", minutes = -120, note = "Dentist" } }
+{ from = "bar.19a1208aa73b-5f3a9c", cmds = { { seq = 42, type = "checkout" } } }
+{ from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 43, type = "absence.resolve", id = "a_8f2c", keep = false } } }
+{ from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 44, type = "day.save", date = "2026-10-08", sessions = { … }, absences = { … } } } }
+{ from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 45, type = "adjust.add", id = "j_7c", date = "2026-10-09", minutes = -120, note = "Dentist" } } }
 ```
 
 Delivery protocol (spike S5: each entry's event queue is bounded at 64 and drops state-watch results when full, so a
 single `set` can be lost):
-- the service processes each `(from, seq)` **at most once** (it remembers the last processed `seq` per sender) and
-  publishes **`shift.ack`** = `{ [from] = { seq = lastSeq, ok = bool, error = string? } }`;
+- all senders share the `shift.cmd` key: `watch` fires on every `set`, even for identical values, so a value
+  overwritten by another sender was either delivered or dropped, and a dropped one is retried;
+- the service handles each `(from, seq)` **at most once** (it remembers the last handled `seq` per sender) and
+  publishes **`shift.ack`** = `{ [from] = { seq = lastSeq, ok = bool, error = string? } }`, dropping entries older
+  than one minute;
 - the sender removes acknowledged commands from its list and re-publishes the list if a command is still
-  unacknowledged after 1 s (max 5 attempts, then an inline error);
-- `watch` fires on every `set`, even for identical values, so re-publishing is enough to retry.
+  unacknowledged after 1 s (max 5 attempts, then an error is shown);
+- **command types are idempotent**: they name the target state (`checkin`/`checkout` rather than `toggle`) or carry
+  the id they apply to, so a command handled again after a service reload, which forgets the handled `seq`s, changes
+  nothing. `toggle` exists only over IPC, which is not retried.
 
 The panel shows inline errors from `shift.ack`.
 
@@ -1167,4 +1175,4 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D27 | Project setup, tooling and CI form a dedicated milestone (M1) before any feature work. | Every feature PR is validated by CI from day one. |
 | D28 | Full daily backups of all data files, kept 30 days, plus one per month kept 12 months. | Lets the user go back far, with bounded disk usage (about 10 MB). |
 | D29 | The automation window is configured with typed settings (start, end, holidays excluded; days = contract workdays) plus an optional `extra_rules` DSL list for exceptions. | The native list editor cannot edit entries in place (spike S4); the everyday case must stay comfortable. |
-| D30 | UI → service commands use per-sender keys with acknowledgement, retry and at-most-once processing. | State-watch events can be dropped when an entry's queue is full (spike S5). |
+| D30 | UI → service commands share one key, with per-runtime sender ids, acknowledgement, retry, at-most-once processing and idempotent command types. | State-watch events can be dropped when an entry's queue is full (spike S5). The service cannot enumerate per-sender keys, and idempotency covers a service reload. |

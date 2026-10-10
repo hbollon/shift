@@ -1,9 +1,12 @@
 --!nonstrict
 -- Shift bar widget: renders the core snapshot and opens the dashboard on click.
 
+local Host = require("./lib/host.luau")
+
 local DASHBOARD = "hbollon/shift:dashboard"
 
-local snapshot = noctalia.state.get("shift.snapshot")
+local host = Host.new()
+local snapshot = host.state.get("shift.snapshot")
 
 local function render()
   local status = snapshot and snapshot.status or "off"
@@ -12,10 +15,10 @@ local function render()
     ui.glyph({ name = status == "off" and "briefcase-off" or "briefcase" }),
     ui.label({ text = "--:--", color = "on_surface_variant" }),
   }))
-  barWidget.setTooltip(noctalia.tr("bar.tooltip"))
+  barWidget.setTooltip(host.tr("bar.tooltip"))
 end
 
-noctalia.state.watch("shift.snapshot", function(value)
+host.state.watch("shift.snapshot", function(value)
   snapshot = value
   render()
 end)
@@ -25,5 +28,5 @@ function update()
 end
 
 function onClick()
-  noctalia.togglePanel(DASHBOARD)
+  host.togglePanel(DASHBOARD)
 end

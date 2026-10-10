@@ -8,5 +8,82 @@
   },
   "tile": {
     "label": "Shift"
+  },
+  "settings": {
+    "weekly_hours": {
+      "label": "Weekly hours",
+      "description": "Contract hours per week, split evenly over your workdays."
+    },
+    "work_week": {
+      "label": "Work week",
+      "description": "Days your contract expects you to work.",
+      "mon_fri": "Monday to Friday",
+      "mon_sat": "Monday to Saturday",
+      "custom": "Custom"
+    },
+    "workday_mon": {
+      "label": "Monday"
+    },
+    "workday_tue": {
+      "label": "Tuesday"
+    },
+    "workday_wed": {
+      "label": "Wednesday"
+    },
+    "workday_thu": {
+      "label": "Thursday"
+    },
+    "workday_fri": {
+      "label": "Friday"
+    },
+    "workday_sat": {
+      "label": "Saturday"
+    },
+    "workday_sun": {
+      "label": "Sunday"
+    },
+    "day_start_hour": {
+      "label": "Workday starts at",
+      "description": "Hour (0–12) at which a new workday begins. Work before it counts toward the previous day."
+    },
+    "duration_format": {
+      "label": "Duration format",
+      "description": "How durations are displayed.",
+      "colon": "7:30",
+      "units": "7h 30m",
+      "decimal": "7.50 h"
+    }
+  },
+  "errors": {
+    "overlap": {
+      "title": "Session not recorded",
+      "body": "It overlaps a session that is already recorded, probably because the system clock changed."
+    },
+    "store": {
+      "unavailable": {
+        "title": "Shift cannot save data",
+        "body": "The plugin data folder is unavailable ({file}). Tracked time will not be saved."
+      },
+      "unreadable": {
+        "title": "Shift data is unreadable",
+        "body": "{file} exists but cannot be read. Shift will not save anything until this is fixed."
+      },
+      "corrupt": {
+        "title": "Shift data was damaged",
+        "body": "{file} could not be parsed and was renamed with a .corrupt suffix. Shift continues without its contents."
+      },
+      "corrupt_stuck": {
+        "title": "Shift data was damaged",
+        "body": "{file} could not be parsed nor renamed. Shift will not save anything until it is repaired or removed."
+      },
+      "newer": {
+        "title": "Shift data is from a newer version",
+        "body": "{file} was written by a newer version of Shift. Update the plugin; nothing will be saved until then."
+      },
+      "write": {
+        "title": "Shift could not save data",
+        "body": "Writing {file} failed. Recent changes may be lost if Noctalia stops."
+      }
+    }
   }
 }

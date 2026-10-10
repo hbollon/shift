@@ -10,6 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LUAU="$ROOT/.tools/bin/luau"
+# Calendar logic depends on the local timezone: pin one with DST transitions.
+export TZ=Europe/Paris
 MIRROR="$ROOT/build/test"
 FILTER="${1:-}"
 

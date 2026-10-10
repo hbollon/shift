@@ -11,7 +11,7 @@ LUAU_SOURCES = $(shell find shift tests -name '*.luau')
 .NOTPARALLEL:
 
 help: ## Show available targets
-	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 tools: ## Install the pinned toolchain into .tools/
 	@scripts/install-tools.sh
@@ -19,9 +19,10 @@ tools: ## Install the pinned toolchain into .tools/
 test: tools ## Run the Luau test suite (FILTER=name to select specs)
 	@scripts/run-tests.sh $(FILTER)
 
-analyze: tools ## Type-check and lint with luau-lsp and the Noctalia definitions
+analyze: tools ## Type-check with luau-lsp and check that only lib/host.luau uses noctalia
 	@$(LUAU_LSP) analyze --platform standard --definitions=@noctalia=.tools/noctalia.d.luau \
 		--base-luaurc=.luaurc $(LUAU_SOURCES)
+	@scripts/check-host.sh
 
 lint: ## Cross-check declared settings against code (needs a local Noctalia)
 	@command -v noctalia >/dev/null || { echo "noctalia not installed, skipping"; exit 0; }; \
