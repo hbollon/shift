@@ -67,6 +67,25 @@
       "colon": "7:30",
       "units": "7h 30m",
       "decimal": "7.50 h"
+    },
+    "style": {
+      "label": "Style",
+      "description": "What the widget shows next to today's time.",
+      "full": "Icon, time and progress ring",
+      "compact": "Icon and time",
+      "minimal": "Time only"
+    },
+    "value": {
+      "label": "Value",
+      "worked": "Worked today",
+      "remaining": "Remaining today"
+    },
+    "when_off": {
+      "label": "When checked out",
+      "description": "Hidden widgets come back at the next check-in; check in from the panel, the control center or IPC.",
+      "show": "Show normally",
+      "dim": "Dim",
+      "hide": "Hide"
     }
   },
   "errors": {

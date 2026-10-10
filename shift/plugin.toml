@@ -121,6 +121,40 @@ entry = "core.luau"
 id    = "bar"
 entry = "bar.luau"
 
+[[widget.setting]]
+key             = "style"
+type            = "select"
+label_key       = "settings.style.label"
+description_key = "settings.style.description"
+default         = "full"
+options = [
+  { value = "full", label_key = "settings.style.full" },
+  { value = "compact", label_key = "settings.style.compact" },
+  { value = "minimal", label_key = "settings.style.minimal" },
+]
+
+[[widget.setting]]
+key             = "value"
+type            = "select"
+label_key       = "settings.value.label"
+default         = "worked"
+options = [
+  { value = "worked", label_key = "settings.value.worked" },
+  { value = "remaining", label_key = "settings.value.remaining" },
+]
+
+[[widget.setting]]
+key             = "when_off"
+type            = "select"
+label_key       = "settings.when_off.label"
+description_key = "settings.when_off.description"
+default         = "dim"
+options = [
+  { value = "show", label_key = "settings.when_off.show" },
+  { value = "dim", label_key = "settings.when_off.dim" },
+  { value = "hide", label_key = "settings.when_off.hide" },
+]
+
 [[panel]]
 id              = "dashboard"
 entry           = "dashboard.luau"

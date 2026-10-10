@@ -8,6 +8,7 @@ local Automation = require("./lib/automation.luau")
 local Commands = require("./lib/commands.luau")
 local Host = require("./lib/host.luau")
 local Model = require("./lib/model.luau")
+local Ring = require("./lib/ring.luau")
 local Store = require("./lib/store.luau")
 local Time = require("./lib/time.luau")
 local Types = require("./lib/types.luau")
@@ -111,6 +112,9 @@ if state.open then
     state.open = nil
   end
 end
+
+-- Rings cached for an older palette or older drawing code are never shown again.
+Ring.prune(host)
 
 saveState()
 publish()

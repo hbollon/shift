@@ -1,11 +1,12 @@
 --!nonstrict
--- Shift bar widget (spec §7.3): today's worked time, live from the core snapshot.
--- Left click opens the dashboard; right click checks in or out.
+-- Shift bar widget (spec §7.3): status glyph · today's worked time · progress ring, live
+-- from the core snapshot. Left click opens the dashboard; right click checks in or out.
 
 local Commands = require("./lib/commands.luau")
 local Format = require("./lib/format.luau")
 local Host = require("./lib/host.luau")
 local Model = require("./lib/model.luau")
+local Ring = require("./lib/ring.luau")
 local Types = require("./lib/types.luau")
 
 local DASHBOARD = "hbollon/shift:dashboard"
@@ -52,28 +53,68 @@ local function tooltip(snapshot: Types.Snapshot, live: Types.Live, fmt: Types.Du
   return rows
 end
 
+-- Widget settings (spec §7.3), per bar instance.
+local STYLES = { full = true, compact = true, minimal = true }
+local VALUES = { worked = true, remaining = true }
+local WHEN_OFF = { show = true, dim = true, hide = true }
+
+local function setting(key: string, allowed: { [string]: boolean }, default: string): string
+  local value = host.getConfig(key)
+  return allowed[value] and value or default
+end
+
+-- The ring is a secondary indicator: about 0.75x the glyph, with a thin stroke.
+local RING_SIZE = 13
+local RING_STROKE = 2
+
+local function counterText(live: Types.Live, value: string, fmt: Types.DurationFormat, vertical: boolean): string
+  if value == "remaining" and live.targetMs > 0 then
+    if live.overtimeMs > 0 then
+      return "+" .. (vertical and Format.compact(live.overtimeMs) or Format.duration(live.overtimeMs, fmt))
+    end
+    return vertical and Format.compact(live.remainingMs) or Format.duration(live.remainingMs, fmt)
+  end
+  return vertical and Format.compact(live.workedMs) or Format.duration(live.workedMs, fmt)
+end
+
 local function render()
   local vertical = barWidget.isVertical()
   if not snapshot then
     -- The core service has not published yet (it is starting or failed to load).
     if rendered ~= "waiting" then
       rendered = "waiting"
+      barWidget.setVisible(true)
       barWidget.render(ui.glyph({ name = "briefcase-off", color = "on_surface_variant" }))
       barWidget.setTooltip(host.tr("bar.waiting"))
     end
     return
   end
 
+  local style = setting("style", STYLES, "full")
+  local whenOff = setting("when_off", WHEN_OFF, "dim")
   local fmt = snapshot.display.durationFormat
   local live = Model.live(snapshot, host.nowMs())
   local working = snapshot.status == "working"
-  local text = vertical and Format.compact(live.workedMs) or Format.duration(live.workedMs, fmt)
-  local color = not working and "on_surface_variant" or (live.overtimeMs > 0 and "tertiary" or "primary")
+  local muted = not working and whenOff == "dim"
 
+  local glyphColor = "primary"
+  if muted then
+    glyphColor = "on_surface_variant"
+  elseif live.targetMs > 0 and live.overtimeMs > 0 then
+    glyphColor = "tertiary"
+  end
+
+  local ring
+  if style == "full" and not vertical and live.targetMs > 0 then
+    ring = Ring.path(host, RING_SIZE, RING_STROKE, live.workedMs / live.targetMs, muted)
+  end
+
+  local text = counterText(live, setting("value", VALUES, "worked"), fmt, vertical)
   local rows = tooltip(snapshot, live, fmt)
+  local hidden = not working and whenOff == "hide"
 
   -- Re-render only when what is displayed changes, not on every tick.
-  local parts = { text, color, tostring(vertical) }
+  local parts = { style, text, glyphColor, tostring(working), tostring(vertical), tostring(ring), tostring(hidden) }
   for _, row in rows do
     table.insert(parts, row.key .. "=" .. row.value)
   end
@@ -83,11 +124,17 @@ local function render()
   end
   rendered = signature
 
+  barWidget.setVisible(not hidden)
+  local children = {}
+  if style ~= "minimal" then
+    table.insert(children, ui.glyph({ name = working and "briefcase" or "briefcase-off", color = glyphColor }))
+  end
+  table.insert(children, ui.label({ text = text, color = muted and "on_surface_variant" or nil }))
+  if ring then
+    table.insert(children, ui.image({ path = ring, width = RING_SIZE, height = RING_SIZE }))
+  end
   local container = vertical and ui.column or ui.row
-  barWidget.render(container({ gap = vertical and 2 or 6, align = "center" }, {
-    ui.glyph({ name = working and "briefcase" or "briefcase-off", color = color }),
-    ui.label({ text = text, color = not working and "on_surface_variant" or nil }),
-  }))
+  barWidget.render(container({ gap = vertical and 2 or 6, align = "center" }, children))
   barWidget.setTooltip(rows)
 end
 
