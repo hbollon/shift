@@ -559,20 +559,44 @@ pruned at startup. A palette change is detected by comparing `getColor` results 
 
 ### 7.3 Bar widget (`hbollon/shift:bar`)
 
-**Horizontal bar, default style `ring_text`:**
+**Horizontal bar, default style `full`:** status glyph · counter · progress ring.
 
 ```
- ╭──────────────╮      ╭──────────────╮      ╭────────────────╮      ╭──────────────╮
- │ ◔  5:42      │      │ ◉  7:23      │      │ ⏱! 5:42        │      │ ⌀  5:42      │
- ╰──────────────╯      ╰──────────────╯      ╰────────────────╯      ╰──────────────╯
-   working              overtime (tertiary)    pending absence         off (muted)
+ ╭───────────────╮   ╭───────────────╮   ╭───────────────╮   ╭───────────────╮   ╭──────────────╮
+ │ 💼  3:12  ◔   │   │ 💼  7:23  ◉   │   │ ⏱!  5:42  ◔   │   │ ⌀  5:42  ◌    │   │ 💼  1:05     │
+ ╰───────────────╯   ╰───────────────╯   ╰───────────────╯   ╰───────────────╯   ╰──────────────╯
+   working             overtime            pending absence     off (muted)         no target today
 ```
 
-**Vertical bar:** a column with the ring, then a compact value (`5h`, or `5:42` if it fits).
+The order reads as a sentence: *status* (glyph), *value* (counter), *where I stand* (ring). Each element has one job,
+so none of them has to be overloaded, and the counter keeps the two pictograms apart.
+
+| Element | Role | Rendering |
+|---------|------|-----------|
+| Glyph | Status, readable without color (§7.2) | `briefcase` working · `briefcase-off` off · `clock-exclamation` pending absence · `clock-play`/`clock-pause` suggestion |
+| Counter | The `value` setting (worked time by default) | Neutral text color while working, muted when off; bold not used in the bar |
+| Ring | Progress toward today's target | SVG ring (§7.2), **smaller than the glyph** (about 0.75× its size) with a thin stroke, so it stays secondary; exact size tuned on screenshots |
+
+**Color budget**: at most two colored elements, the glyph and the ring's arc. The counter stays neutral.
+
+| State | Glyph | Ring |
+|-------|-------|------|
+| Working | `primary` | arc `primary` |
+| Overtime | `tertiary` | full `primary` circle + second lap in `tertiary` |
+| Pending absence / suggestion | `secondary` | unchanged |
+| Off | `on_surface_variant` | track and arc muted (`on_surface_variant`), still showing today's progress |
+
+**Ring visibility rules**
+- Hidden when today's target is 0 (non-workday, holiday, day off): there is nothing to progress toward.
+- Kept (muted) when off, so the widget width does not change at each check in/out and the neighbouring widgets do
+  not jump.
+
+**Vertical bar:** a column with the glyph, then a compact value (`5h`). No ring: three stacked elements would be too
+tall.
 
 | Widget setting | Values | Default |
 |---------------|--------|---------|
-| `style` | `ring_text`, `glyph_text`, `text`, `ring` | `ring_text` |
+| `style` | `full` (glyph · counter · ring), `compact` (glyph · counter), `minimal` (counter only) | `full` |
 | `value` | `worked`, `remaining`, `balance` | `worked` |
 | `when_off` | `show`, `dim`, `hide` | `dim` |
 
@@ -702,7 +726,7 @@ All labels and descriptions are translation keys (`settings.<key>.label` / `.des
 | Key | Type | Default | Scope | Notes |
 |-----|------|---------|-------|-------|
 | `duration_format` | select | `colon` | P | `colon` (7:30), `units` (7h 30m), `decimal` (7.50 h) |
-| `style` | select | `ring_text` | W | §7.3 |
+| `style` | select | `full` | W | §7.3 |
 | `value` | select | `worked` | W | §7.3 |
 | `when_off` | select | `dim` | W | §7.3 |
 
@@ -1169,7 +1193,7 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D21 | An open session at the workday boundary is closed at the last known activity and the day is flagged for review. | Prevents a forgotten check-out from inflating the next day. |
 | D22 | Contract changes (weekly hours, workdays) always apply from the day they are made, never retroactively. An initial mistake is corrected with an adjustment. | Predictable: past days never change behind the user's back. |
 | D23 | Missing days are excluded from the balance until the user reviews them (day off, add session, or confirm not worked). | The balance is never wrong because the PC was off or the plugin not running. |
-| D24 | Visual defaults: bar widget shows ring + worked time; panel attached to the bar, opening near the widget; hero counter shows discreet seconds; overtime drawn as a second ring lap in `tertiary`. | Glanceable and native-feeling by default; every one is a per-user setting except the overtime rendering. |
+| D24 | Visual defaults: bar widget shows status glyph · worked time · small progress ring (ring hidden without a target, muted when off); panel attached to the bar, opening near the widget; hero counter shows discreet seconds; overtime drawn as a second ring lap in `tertiary`. | Glanceable and native-feeling by default. Separate elements stay legible at bar size (a glyph drawn inside the ring would be too small and busy); the glyph carries the status without relying on color. Every one is a per-user setting except the overtime rendering. |
 | D25 | Workdays are chosen with a `work_week` preset (Mon–Fri / Mon–Sat / Custom); the 7 per-day toggles appear only for Custom. | Uncluttered settings for the common case without limiting anyone. |
 | D26 | Publish to the community store at v0.1.0, together with the first GitHub release. | Early feedback; the store handles updates. |
 | D27 | Project setup, tooling and CI form a dedicated milestone (M1) before any feature work. | Every feature PR is validated by CI from day one. |

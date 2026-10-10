@@ -9,7 +9,7 @@ balance you can adjust when you take time off — all rendered with Noctalia's n
 
 ## Highlights (v1)
 
-- **Bar widget** with a progress ring and today's worked time; right-click to check in or out.
+- **Bar widget** with your status, today's worked time and a small progress ring; right-click to check in or out.
 - **Dashboard panel**: live counter with estimated end time, week and balance at a glance, history (week/month),
   per-day editing, balance adjustments, undo.
 - **Control-center tile** to toggle tracking.
