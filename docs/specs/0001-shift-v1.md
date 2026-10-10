@@ -699,8 +699,8 @@ has focus. Escape closes the panel (host-owned).
 
 ### 7.5 Control-center tile (`hbollon/shift:tile`)
 
-- Label: `Working · 5:42` / `Off · 5:42` / `Away · 5:42`. Icon: `briefcase` (on) / `briefcase-off` (off).
-  `setActive(working or away)`.
+- Label: `Working` / `Off` / `Away`: the tile is an action shortcut, and tiles show only about ten characters (the
+  time is in the bar). Icon: `briefcase` (on) / `briefcase-off` (off). `setActive(working or away)`.
 - Click: toggle check in/out. Right click: open the panel.
 
 ### 7.6 Microcopy and i18n

@@ -1,8 +1,8 @@
 # Shift
 
 Track your working hours from the Noctalia shell: one-click check in / check out, a live daily counter against your
-contract, and an overtime balance you can adjust. Shift is under active development: manual check in / check out and
-the bar widget work today; the dashboard and automation are coming.
+contract, and an overtime balance you can adjust. Shift is under active development: manual tracking works today from
+the bar, the dashboard and the control center; automation, history and the balance are coming.
 
 ## Plugin
 
@@ -26,7 +26,8 @@ the bar widget work today; the dashboard and automation are coming.
   noctalia msg panel-toggle hbollon/shift:dashboard
   ```
 
-- **Control-center tile**: add `Shift` from Settings → Control Center shortcuts.
+- **Control-center tile**: add `Shift` from Settings → Control Center shortcuts. Click it to check in or out;
+  right-click it to open the dashboard.
 - **IPC**, for keybinds and scripts:
 
   ```sh
