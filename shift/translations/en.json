@@ -5,6 +5,17 @@
     "off": "Off",
     "off_since": "Off since {time}"
   },
+  "days": {
+    "short": {
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat",
+      "sun": "Sun"
+    }
+  },
   "bar": {
     "waiting": "Shift is starting…",
     "tooltip": {
@@ -17,9 +28,50 @@
       "remaining_eta": "{remaining} (until ~{time})"
     }
   },
-  "dashboard": {
+  "panel": {
     "title": "Shift",
-    "placeholder": "Work-hours tracking is on its way."
+    "waiting": "Shift is starting…",
+    "settings": "Settings",
+    "checkin": "Check in",
+    "checkout": "Check out",
+    "status": {
+      "working_since": "Working since {time}",
+      "off_since": "Off · last session ended {time}",
+      "off": "Off"
+    },
+    "undo": {
+      "checkin": "Undo check in at {time}",
+      "checkout": "Undo check out at {time}"
+    },
+    "welcome": {
+      "title": "Welcome to Shift",
+      "body": "Shift tracks your working time. Check in when you start, check out when you stop; your contract sets the daily target.",
+      "contract": "Contract: {hours} a week · {days} · {daily} a day",
+      "checkin": "Check in now",
+      "settings": "Adjust settings",
+      "dismiss": "Dismiss"
+    },
+    "hero": {
+      "of_target": "of {target}",
+      "left": "{remaining} left",
+      "over": "+{overtime} over",
+      "no_target": "No target today",
+      "done_at": "Done at ~{time}"
+    },
+    "stats": {
+      "week": "This week",
+      "today": "Today"
+    },
+    "today": {
+      "title": "Today",
+      "empty": "No sessions yet today.",
+      "range": "{from} – {to}",
+      "now": "now"
+    },
+    "errors": {
+      "command": "Shift did not respond. Try again.",
+      "undo_expired": "This action can no longer be undone."
+    }
   },
   "tile": {
     "label": "Shift"

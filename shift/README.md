@@ -18,7 +18,9 @@ the bar widget work today; the dashboard and automation are coming.
   target; hover it for the details.
   - Left click: open the dashboard.
   - Right click: check in, or check out when working.
-- **Dashboard panel**: opens from the bar widget or the control-center tile, or with:
+- **Dashboard panel**: today's counter and target, the check in / check out button, this week's total and today's
+  sessions. Recent actions can be undone for 10 minutes (header button or `Ctrl+Z`). It opens from the bar widget or
+  the control-center tile, or with:
 
   ```sh
   noctalia msg panel-toggle hbollon/shift:dashboard

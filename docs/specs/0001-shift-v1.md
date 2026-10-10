@@ -164,7 +164,7 @@ thread with per-call time budgets. This section records the capabilities and con
 | C5 | **Plugins cannot write their own settings** (read-only `getConfig`). | Strict split: *policy* lives in Noctalia settings (edited in the settings GUI, opened via `openSettings()`), *facts* (sessions, adjustments, initial balance, tracking start) live in our data files and are edited in the panel. |
 | C6 | `noctalia.state` is in-memory, copied, and cleared when the plugin stops. | Durable data goes to `pluginDataDir()`. State carries compact snapshots; UIs compute the live counter locally from timestamps to avoid 1 Hz state churn. |
 | C7 | `noctalia.notify(title, body)` has no action buttons. | v1 notifications are informative only. Action buttons are deferred to spec 0002. |
-| C8 | Declarative UI has no date/time picker, no chart beyond `ui.graph` (line), no absolute positioning. | Time entry uses validated text inputs with smart parsing. Bar charts are built from `ui.box` heights. The progress ring is an SVG generated with palette colors (the image loader supports SVG via librsvg), with a `ui.progress` fallback. |
+| C8 | Declarative UI has no date/time picker, no chart beyond `ui.graph` (line), no absolute positioning. | Time entry uses validated text inputs with smart parsing. Bar charts are built from `ui.box` heights. The progress ring is an SVG generated with palette colors (the image loader supports SVG via librsvg), with a `ui.progress` fallback. Text over the hero ring uses a column with a negative `gap` and a fixed height (undocumented behavior, isolated in `lib/ui/overlay.luau`, D31). |
 | C9 | Bar widgets: one control tall, no keyboard, no `ui.input/select/scroll`. | The bar shows status and supports a quick toggle; all editing happens in the panel. |
 | C10 | The plugin system is **beta**; manifest/API may still change. | Keep the API surface small, pin `plugin_api`, and isolate host calls behind a thin adapter (`lib/host.luau`). |
 
@@ -617,13 +617,13 @@ or state changes).
 
 ### 7.4 Panel (`hbollon/shift:dashboard`)
 
-Manifest defaults: `width = 400`, `height = 620`, `placement = "attached"`, `position = "auto"`,
+Manifest defaults: `width = 400`, `height = 660`, `placement = "attached"`, `position = "auto"`,
 `open_near_click = true`. Second ticks are enabled while open.
 
 ```
 ┌────────────────────────────────────────────┐
 │ Shift                      Thu, Oct 9   ↶ ⚙ │  header: title · date · undo · settings
-│ ● Working since 08:57                       │  status chip
+│ ● Working since 08:57       Done at ~17:36 │  status chip · estimated end
 ├────────────────────────────────────────────┤
 │ ⚠ Away 10:12 → 10:54 (42 min) · Locked     │  attention cards (0..n)
 │               [Count as work]   [Remove]   │
@@ -633,7 +633,6 @@ Manifest defaults: `width = 400`, `height = 620`, `placement = "attached"`, `pos
 │             │   of 7:00     │              │
 │              ╲  1:18 left  ╱               │
 │               ╰───────────╯                │
-│           Done at ~17:36                   │
 │        [  ⇥  Check out  ]                  │  primary action
 ├────────────────────────────────────────────┤
 │ This week     Balance        Today         │  stat tiles
@@ -660,10 +659,15 @@ Stacked cards, most recent first, with a maximum of 3 (then "+2 more → History
 days flagged `needsReview`, and missing days to review (one grouped card: *"2 days to review"* → History).
 
 #### 7.4.3 Hero
-Ring (≈160 px) with `H:MM` in large bold and `:SS` small and muted, *"of 7:00"*, *"1:18 left"* or *"+0:23 over"* (in
-`tertiary`). Under it: *"Done at ~17:36"* while working. On non-workdays it shows *"No target today"* and the ring
+Ring (≈150 px) with `H:MM` in large bold and the seconds small and muted (`:SS`, or `SSs` with the `7h 30m` format,
+none with the decimal format), *"of 7:00"*, *"1:18 left"* or *"+0:23 over"* (in
+`tertiary`). The estimated end, *"Done at ~17:36"*, sits at the right of the status chip while working, to keep the
+hero compact. On non-workdays it shows *"No target today"* and the ring
 shows worked time with a neutral track. The primary button is **Check in** (`primary` variant) or **Check out**
 (`outline` variant).
+
+The counter sits inside the ring through `lib/ui/overlay.luau` (C8, D31). If the overlay ever stops working, only that
+helper changes, to place the text next to the ring.
 
 #### 7.4.4 Stat tiles
 Three equal tiles (`surface_variant` fill, `radius` from shell style): **This week** (worked/target plus a thin
@@ -673,7 +677,9 @@ opens the relevant tab.
 #### 7.4.5 Tabs
 - **Today**: day timeline (a row of proportional `ui.box` segments from `day_start_hour` to now, sessions in
   `primary`, kept absences in `primary/0.4`, removed absences hatched via `outline` border, gaps in
-  `surface_variant/0.4`), followed by the session list. Clicking a session opens the day editor.
+  `surface_variant/0.4`), followed by the session list, most recent first (the running session stays on top). The
+  list shows up to 5 rows and scrolls beyond, so the panel keeps room for the automation footer. Clicking a session
+  opens the day editor.
 - **History**: week view by default, with a week/month toggle (§6.8.1). Bars use `primary` up to the target and
   `tertiary` above it. A target tick is drawn with an `outline` 1 px box. Holidays show `beach`, missing days show
   a `secondary` dot. Container tooltips show exact values.
@@ -1098,7 +1104,7 @@ entry = "bar.luau"
 id              = "dashboard"
 entry           = "dashboard.luau"
 width           = 400
-height          = 620
+height          = 660
 placement       = "attached"
 position        = "auto"
 open_near_click = true
@@ -1139,7 +1145,7 @@ declared settings against code.
 | **M0 — Spikes** | §16 spikes S1–S5 | Each spike documented in `docs/spikes/` with a go/no-go |
 | **M1 — Project setup & tooling** | Repository skeleton (§14), minimal `plugin.toml` + empty entries loadable through a `path` source, `.luaurc`, editor setup (luau-lsp + `noctalia.d.luau`), test runner with a fake host, GitHub Actions CI (unit tests, `luau-analyze`, manifest/translation-key checks), contribution docs, LICENSE | Plugin enables cleanly on a live Noctalia; a sample test runs locally and in CI; CI is required on PRs |
 | **M2 — Core & manual** | Store, model, reducer (manual), service, bar widget (text style), IPC | Check in/out via bar and IPC; counter survives restart; unit tests green in CI |
-| **M3 — Panel & tile** | Panel header/hero/tiles/Today tab, ring SVG, undo, cc tile, onboarding | Full manual workflow from the panel; theme parity checked |
+| **M3 — Panel & tile** | Panel header/hero/stat tiles (week, today)/Today content, ring SVG, undo, cc tile, onboarding; the History and Balance tabs and the Balance tile come with M5 | Full manual workflow from the panel; theme parity checked |
 | **M4 — Automation** | Rules DSL + preview, idle/logind/gap signals, absences + resolution, presets, rollover | All §12 reducer scenarios pass; live tests on suspend/lock/idle |
 | **M5 — History & balance** | Week/month views, day editor, missing-day review, day off, adjustments, contract history, holidays | Past-day editing round-trips; balance matches a hand-computed fixture |
 | **M6 — Backups** | Full daily backups (§10.1), retention pruning, backup before migrations, restore of a corrupt file from the latest backup (§10.3) | Backup taken on the first tick of a workday; retention verified on a fixture; a corrupt file is restored from the latest backup |
@@ -1206,4 +1212,5 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D28 | Full daily backups of all data files, kept 30 days, plus one per month kept 12 months. | Lets the user go back far, with bounded disk usage (about 10 MB). |
 | D29 | The automation window is configured with typed settings (start, end, holidays excluded; days = contract workdays) plus an optional `extra_rules` DSL list for exceptions. | The native list editor cannot edit entries in place (spike S4); the everyday case must stay comfortable. |
 | D30 | UI → service commands share one key, with per-runtime sender ids, acknowledgement, retry, at-most-once processing and idempotent command types. | State-watch events can be dropped when an entry's queue is full (spike S5). The service cannot enumerate per-sender keys, and idempotency covers a service reload. |
+| D31 | The hero counter is drawn over the ring with a negative-`gap` column, confined to one helper (`lib/ui/overlay.luau`). | Noctalia has no stacking container; the overlay keeps the spec's design, and a breaking host change only touches that helper (fallback: text next to the ring). |
 | D32 | Undo works for 10 minutes from every surface (button, `ctrl+z`, IPC); undos chain while entries are recent. | One rule everywhere, and no risk of reverting an old action by accident. |

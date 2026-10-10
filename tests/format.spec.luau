@@ -40,6 +40,37 @@ t.describe("format.compact", function()
   end)
 end)
 
+t.describe("format.signed", function()
+  t.it("adds a plus sign to positive deltas", function()
+    t.expect(Format.signed(23 * M, "colon")).toBe("+0:23")
+    t.expect(Format.signed(-(H + 18 * M), "colon")).toBe("-1:18")
+    t.expect(Format.signed(30 * S, "colon")).toBe("0:00")
+  end)
+end)
+
+t.describe("format.workdays", function()
+  local NAMES = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" }
+  local function days(...)
+    local out = { false, false, false, false, false, false, false }
+    for _, d in { ... } do
+      out[d] = true
+    end
+    return out
+  end
+
+  t.it("collapses runs of three days or more", function()
+    t.expect(Format.workdays(days(1, 2, 3, 4, 5), NAMES)).toBe("Mon–Fri")
+    t.expect(Format.workdays(days(1, 2, 3, 4, 5, 6, 7), NAMES)).toBe("Mon–Sun")
+    t.expect(Format.workdays(days(1, 2, 3, 4, 6), NAMES)).toBe("Mon–Thu, Sat")
+  end)
+
+  t.it("lists short runs day by day", function()
+    t.expect(Format.workdays(days(1, 3, 5), NAMES)).toBe("Mon, Wed, Fri")
+    t.expect(Format.workdays(days(6, 7), NAMES)).toBe("Sat, Sun")
+    t.expect(Format.workdays(days(), NAMES)).toBe("")
+  end)
+end)
+
 t.describe("format.clock", function()
   t.it("uses the shell time format", function()
     local at = os.time({ year = 2026, month = 10, day = 9, hour = 12, min = 2 }) -- 14:02 in Paris

@@ -37,6 +37,42 @@ function Format.compact(ms: number): string
   return string.format("%dh", minutes // 60)
 end
 
+-- Signed duration for deltas: "+0:23", "-1:18", "0:00".
+function Format.signed(ms: number, style: string?): string
+  local text = Format.duration(ms, style)
+  if ms >= 60000 then
+    return "+" .. text
+  end
+  return text
+end
+
+-- Compact list of workdays: runs of three days or more collapse into ranges
+-- ("Mon–Fri", "Mon, Wed, Fri", "Mon–Thu, Sat"). `names` holds the 7 short day names,
+-- Monday first.
+function Format.workdays(workdays: { boolean }, names: { string }): string
+  local parts = {}
+  local day = 1
+  while day <= 7 do
+    if workdays[day] then
+      local last = day
+      while last < 7 and workdays[last + 1] do
+        last += 1
+      end
+      if last - day >= 2 then
+        table.insert(parts, names[day] .. "–" .. names[last])
+      else
+        for d = day, last do
+          table.insert(parts, names[d])
+        end
+      end
+      day = last + 1
+    else
+      day += 1
+    end
+  end
+  return table.concat(parts, ", ")
+end
+
 -- Clock time in the user's 12/24 h preference (`[shell].time_format`).
 function Format.clock(host: Types.Host, epochS: number): string
   return host.formatTime(host.timeFormat(), epochS)

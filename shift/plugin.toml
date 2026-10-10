@@ -159,10 +159,11 @@ options = [
 id              = "dashboard"
 entry           = "dashboard.luau"
 width           = 400
-height          = 620
+height          = 660
 placement       = "attached"
 position        = "auto"
 open_near_click = true
+capture_keys    = ["ctrl+z"]
 
 [[shortcut]]
 id    = "tile"

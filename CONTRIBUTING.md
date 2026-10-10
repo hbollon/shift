@@ -71,6 +71,7 @@ shift/              the plugin, laid out exactly as in community-plugins
   dashboard.luau    [[panel]]   — dashboard panel
   tile.luau         [[shortcut]] — control-center tile
   lib/              shared modules (pure logic first)
+  lib/ui/           shared UI components (the only modules using `ui`)
   translations/en.json
 tests/              *.spec.luau unit tests, lib/testing.luau, lib/fake_host.luau, lib/json.luau
 scripts/            toolchain, test runner, store validation, catalog generation
@@ -86,7 +87,7 @@ spikes/             throwaway spike plugin (not shipped)
   runner strips it for the Luau CLI).
 - Only `shift/lib/host.luau` touches the `noctalia` global; entries and modules use the adapter it returns
   (`make analyze` enforces it). The rendering globals of each entry type (`ui`, `barWidget`, `panel`, `shortcut`)
-  are used directly, and only in the entry files.
+  are used directly, and only in the entry files; shared UI components in `shift/lib/ui/` may use `ui`.
 - Keep logic in pure modules that receive the host as a parameter, so they are testable with
   `tests/lib/fake_host.luau`. Entry scripts stay thin.
 - Shared domain types (persisted documents, snapshot, commands, host adapter) live in `shift/lib/types.luau`.
