@@ -30,6 +30,7 @@ the bar widget work today; the dashboard and automation are coming.
   noctalia msg plugin hbollon/shift:core all checkin
   noctalia msg plugin hbollon/shift:core all checkout
   noctalia msg plugin hbollon/shift:core all toggle
+  noctalia msg plugin hbollon/shift:core all undo
   ```
 
 ## Settings

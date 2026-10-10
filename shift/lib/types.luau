@@ -25,8 +25,20 @@ export type Day = {
 -- ledger/YYYY.json; days are keyed by "YYYY-MM-DD".
 export type Ledger = { schema: number, days: { [string]: Day } }
 
+-- An undoable action (spec §6.8.4). `id` names the action and the session it touched,
+-- so an undo command can target it idempotently.
+export type UndoEntry =
+  { id: string, action: "checkin", atS: number, session: OpenSession }
+  | { id: string, action: "checkout", atS: number, session: Session, date: string, recorded: boolean }
+
 -- state.json
-export type State = { schema: number, heartbeatS: number?, open: OpenSession? }
+export type State = {
+  schema: number,
+  heartbeatS: number?,
+  open: OpenSession?,
+  undo: { UndoEntry }?, -- oldest first, at most Model.UNDO_DEPTH entries
+  firstRunDismissed: boolean?,
+}
 
 -- balance.json
 export type Balance = {
@@ -62,8 +74,12 @@ export type Snapshot = {
     removedInOpenMs: number,
     targetMs: number,
     isWorkday: boolean,
+    sessions: { { startS: number, endS: number } }, -- closed sessions, in order
   },
   week: { workedMs: number, targetMs: number }, -- closed sessions; UIs add the open one
+  undo: { id: string, action: "checkin" | "checkout", atS: number }?, -- nil once older than the undo window
+  contract: { weeklyHours: number, workdays: { boolean }, dailyTargetMs: number },
+  flags: { firstRun: boolean },
   display: { durationFormat: DurationFormat },
 }
 
@@ -80,10 +96,11 @@ export type Live = {
 
 -- Reducer (lib/automation.luau) -------------------------------------------------------
 
-export type Event = { type: string, origin: Origin? }
+export type Event = { type: string, origin: Origin?, id: string? }
 
 export type Effect =
   { type: "ledger.addSession", date: string, session: Session }
+  | { type: "ledger.removeSession", date: string, id: string }
   | { type: "state.save" }
   | { type: "publish" }
 
@@ -106,6 +123,7 @@ export type Host = {
   nowMs: () -> number,
   formatTime: (pattern: string, unixSeconds: number?) -> string,
   timeFormat: () -> string,
+  dateFormat: () -> string,
   state: {
     set: (key: string, value: any) -> (),
     get: (key: string) -> any,
@@ -122,6 +140,10 @@ export type Host = {
   renameFile: (from: string, to: string) -> (boolean, string?),
   fileExists: (path: string) -> boolean,
   mkdirAll: (path: string) -> (boolean, string?),
+  listDir: (path: string) -> ({ string }?, string?),
+  removeFile: (path: string) -> (boolean, string?),
+  getColor: (role: string) -> string?,
+  openSettings: () -> (),
   setUpdateInterval: (ms: number) -> (),
   togglePanel: (panelId: string) -> (),
   log: (message: string) -> (),

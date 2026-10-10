@@ -63,10 +63,19 @@ local function addSession(date: string, session: Types.Session)
   host.notifyError(host.tr("errors.overlap.title"), host.tr("errors.overlap.body"))
 end
 
+local function removeSession(date: string, id: string)
+  local day = store:day(date)
+  if day and Model.removeSession(day, id) then
+    store:saveLedger(Time.year(date))
+  end
+end
+
 local function apply(effects: { Types.Effect })
   for _, effect in effects do
     if effect.type == "ledger.addSession" then
       addSession(effect.date, effect.session)
+    elseif effect.type == "ledger.removeSession" then
+      removeSession(effect.date, effect.id)
     elseif effect.type == "state.save" then
       saveState()
     elseif effect.type == "publish" then
@@ -106,9 +115,9 @@ end
 saveState()
 publish()
 
--- Only explicit fields are forwarded: commands come from other entries' state writes.
+-- Only known fields are forwarded: commands come from other entries' state writes.
 Commands.receiver(host, function(cmd)
-  return dispatch({ type = cmd.type })
+  return dispatch({ type = cmd.type, id = type(cmd.id) == "string" and cmd.id or nil })
 end)
 
 host.setUpdateInterval(TICK_MS)
@@ -131,14 +140,17 @@ function onConfigChanged()
   publish()
 end
 
-local IPC_EVENTS = { checkin = true, checkout = true, toggle = true }
+local IPC_EVENTS = { checkin = true, checkout = true, toggle = true, undo = true }
 
 function onIpc(event, _payload)
   if not IPC_EVENTS[event] then
     host.log("unknown IPC event: " .. tostring(event))
     return
   end
-  dispatch({ type = event })
+  local result = dispatch({ type = event })
+  if not result.ok then
+    host.log(string.format("IPC %s: %s", event, tostring(result.error)))
+  end
 end
 
 -- Persist on reload, disable and shutdown; an open session stays open (E20, E21).

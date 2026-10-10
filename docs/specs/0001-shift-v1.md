@@ -477,8 +477,12 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 #### 6.8.4 Undo
 - Every mutation (check in/out, absence resolution, edits, adjustments) pushes an inverse operation onto an undo
   stack (depth 20, in `state.json`).
-- The panel header shows **Undo** for 10 minutes after the last action, with a tooltip naming it ("Undo check out at
-  17:02"). It is also available over IPC (`undo`).
+- An action can be undone for **10 minutes**, whatever the path: the panel header's **Undo** button (with a tooltip
+  naming it, "Undo check out at 17:02"), `ctrl+z` in the panel, and IPC (`undo`). Consecutive undos chain while the
+  entries are younger than 10 minutes; older entries stay in the stack but are never undone, so an action from this
+  morning cannot be reverted by mistake.
+- Undo commands from the UIs name the entry they revert (`{ type = "undo", id = "checkout:s_…" }`): delivered twice,
+  the second finds another entry on top and does nothing (§9.3). IPC `undo` reverts the top entry.
 
 ### 6.9 Notifications (v1)
 
@@ -845,17 +849,19 @@ deterministic and fully testable with a fake clock.
     removedInOpenMs = 0,
     targetMs = 25200000,
     isWorkday = true, holiday = nil,
+    sessions = { { startS = 1791529020, endS = 1791541860 } }, -- closed sessions, for the Today view
   },
   week = { workedMs = 101400000, targetMs = 126000000 }, -- closed sessions; UIs add the open one
   balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
   pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } },
   suggestion = nil,            -- "checkin" | "checkout"
-  undo = { label = "Check out at 17:02", atS = 1791558120 },
+  undo = { id = "checkout:s_tmn2rc", action = "checkout", atS = 1791558120 }, -- nil after 10 min; UIs build the label
   automation = {
     preset = "assisted", idleMin = 5,
     backends = { idle = "ok", logind = "ok", holidays = "ok" },
     ruleErrors = {}, windowSummary = "Mon–Fri 08:00–19:00",
   },
+  contract = { weeklyHours = 35, workdays = { true, true, true, true, true, false, false }, dailyTargetMs = 25200000 },
   flags = { firstRun = false, needsReview = { "2026-10-07" } },
   display = { durationFormat = "colon" }, -- settings the UIs need to render
 }
@@ -1200,3 +1206,4 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D28 | Full daily backups of all data files, kept 30 days, plus one per month kept 12 months. | Lets the user go back far, with bounded disk usage (about 10 MB). |
 | D29 | The automation window is configured with typed settings (start, end, holidays excluded; days = contract workdays) plus an optional `extra_rules` DSL list for exceptions. | The native list editor cannot edit entries in place (spike S4); the everyday case must stay comfortable. |
 | D30 | UI → service commands share one key, with per-runtime sender ids, acknowledgement, retry, at-most-once processing and idempotent command types. | State-watch events can be dropped when an entry's queue is full (spike S5). The service cannot enumerate per-sender keys, and idempotency covers a service reload. |
+| D32 | Undo works for 10 minutes from every surface (button, `ctrl+z`, IPC); undos chain while entries are recent. | One rule everywhere, and no risk of reverting an old action by accident. |

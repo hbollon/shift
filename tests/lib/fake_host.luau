@@ -20,6 +20,7 @@ function FakeHost.new(options)
   local translations = options.translations or {}
   local dataDir = options.dataDir or "/data"
   local timeFormat = options.timeFormat or "{:%H:%M}"
+  local palette = options.palette or {}
 
   local host = {
     logs = {},
@@ -54,6 +55,10 @@ function FakeHost.new(options)
 
   function host.timeFormat()
     return timeFormat
+  end
+
+  function host.dateFormat()
+    return "%A, %x"
   end
 
   -- Shared state (delivered synchronously, every set fires, like the host) -----
@@ -162,6 +167,16 @@ function FakeHost.new(options)
 
   function host.togglePanel(panelId)
     table.insert(host.toggledPanels, panelId)
+  end
+
+  host.settingsOpened = 0
+  function host.openSettings()
+    host.settingsOpened += 1
+  end
+
+  -- Palette roles resolve to `options.palette[role]`, or a stable fake color.
+  function host.getColor(role)
+    return palette[role] or "#" .. string.format("%06x", #role * 0x10101)
   end
 
   -- Logs, notifications, translations -------------------------------------------

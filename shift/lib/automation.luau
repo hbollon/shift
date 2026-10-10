@@ -8,6 +8,7 @@
 -- in order (ledger writes before the state, persistence before publishing, spec §10.3):
 --
 --   { type = "ledger.addSession", date = "YYYY-MM-DD", session = { id, startS, endS, origin } }
+--   { type = "ledger.removeSession", date = "YYYY-MM-DD", id = "s_…" }
 --   { type = "state.save" }
 --   { type = "publish" }
 --
@@ -17,7 +18,8 @@
 --
 --   ctx = { nowS, settings }
 --
--- Only manual tracking exists so far (spec §6.2): checkin, checkout and toggle.
+-- Events so far: manual tracking (spec §6.2: checkin, checkout, toggle), undo (§6.8.4)
+-- and the dismissal of the first-run card (§6.10).
 
 local Model = require("./model.luau")
 local Time = require("./time.luau")
@@ -28,11 +30,29 @@ type Event = Types.Event
 type Effect = Types.Effect
 type Result = Types.Result
 type ReduceContext = Types.ReduceContext
+type UndoEntry = Types.UndoEntry
 type Handler = (state: State, event: Event, ctx: ReduceContext) -> (State, { Effect }, Result)
 
 local Automation = {}
 
 local UNCHANGED: Result = { ok = true, changed = false }
+local CHANGED: Result = { ok = true, changed = true }
+
+-- Pushes an undo entry onto a state copy, keeping at most UNDO_DEPTH entries.
+local function pushUndo(state: State, entry: UndoEntry)
+  local stack = table.clone(state.undo or {})
+  table.insert(stack, entry)
+  while #stack > Model.UNDO_DEPTH do
+    table.remove(stack, 1)
+  end
+  state.undo = stack
+end
+
+local function saveAndPublish(effects: { Effect }): { Effect }
+  table.insert(effects, { type = "state.save" })
+  table.insert(effects, { type = "publish" })
+  return effects
+end
 
 local handlers: { [string]: Handler } = {}
 
@@ -41,8 +61,11 @@ function handlers.checkin(state, event, ctx)
     return state, {}, UNCHANGED
   end
   local next = table.clone(state)
-  next.open = { id = Model.sessionId(ctx.nowS), startS = ctx.nowS, origin = event.origin or "manual" }
-  return next, { { type = "state.save" }, { type = "publish" } }, { ok = true, changed = true }
+  local open = { id = Model.sessionId(ctx.nowS), startS = ctx.nowS, origin = event.origin or "manual" }
+  next.open = open
+  next.firstRunDismissed = true
+  pushUndo(next, { id = "checkin:" .. open.id, action = "checkin", atS = ctx.nowS, session = open })
+  return next, saveAndPublish({}), CHANGED
 end
 
 function handlers.checkout(state, _event, ctx)
@@ -51,19 +74,24 @@ function handlers.checkout(state, _event, ctx)
     return state, {}, UNCHANGED
   end
   local effects: { Effect } = {}
+  local session = { id = open.id, startS = open.startS, endS = ctx.nowS, origin = open.origin }
+  local date = Time.workdayOf(open.startS, ctx.settings.dayStartHour)
   -- A check-out in the same second as the check-in leaves nothing worth recording.
-  if ctx.nowS > open.startS then
-    table.insert(effects, {
-      type = "ledger.addSession",
-      date = Time.workdayOf(open.startS, ctx.settings.dayStartHour),
-      session = { id = open.id, startS = open.startS, endS = ctx.nowS, origin = open.origin },
-    })
+  local recorded = ctx.nowS > open.startS
+  if recorded then
+    table.insert(effects, { type = "ledger.addSession", date = date, session = session })
   end
-  table.insert(effects, { type = "state.save" })
-  table.insert(effects, { type = "publish" })
   local next = table.clone(state)
   next.open = nil
-  return next, effects, { ok = true, changed = true }
+  pushUndo(next, {
+    id = "checkout:" .. open.id,
+    action = "checkout",
+    atS = ctx.nowS,
+    session = session,
+    date = date,
+    recorded = recorded,
+  })
+  return next, saveAndPublish(effects), CHANGED
 end
 
 function handlers.toggle(state, event, ctx)
@@ -71,6 +99,53 @@ function handlers.toggle(state, event, ctx)
     return handlers.checkout(state, event, ctx)
   end
   return handlers.checkin(state, event, ctx)
+end
+
+-- Reverts the most recent action if it is younger than the undo window. `event.id`
+-- (sent by the UIs) must name that action: an undo delivered twice then finds another
+-- entry on top, or none, and does nothing. IPC sends no id and undoes the top entry.
+function handlers.undo(state, event, ctx)
+  local top = Model.undoable(state, ctx.nowS)
+  if not top then
+    if event.id then
+      return state, {}, UNCHANGED
+    end
+    return state, {}, { ok = false, error = "nothing_to_undo" }
+  end
+  if event.id and event.id ~= top.id then
+    return state, {}, UNCHANGED
+  end
+
+  local next = table.clone(state)
+  local stack = table.clone(state.undo :: { UndoEntry })
+  table.remove(stack)
+  next.undo = stack
+  local effects: { Effect } = {}
+  if top.action == "checkin" then
+    -- The stack is in action order, so the session it opened is still the open one.
+    if not (state.open and state.open.id == top.session.id) then
+      return state, {}, { ok = false, error = "undo_conflict" }
+    end
+    next.open = nil
+  else
+    if state.open then
+      return state, {}, { ok = false, error = "undo_conflict" }
+    end
+    if top.recorded then
+      table.insert(effects, { type = "ledger.removeSession", date = top.date, id = top.session.id })
+    end
+    next.open = { id = top.session.id, startS = top.session.startS, origin = top.session.origin }
+  end
+  return next, saveAndPublish(effects), CHANGED
+end
+
+handlers["onboarding.dismiss"] = function(state, _event, _ctx)
+  if state.firstRunDismissed then
+    return state, {}, UNCHANGED
+  end
+  local next = table.clone(state)
+  next.firstRunDismissed = true
+  return next, saveAndPublish({}), CHANGED
 end
 
 function Automation.reduce(state: State, event: Event, ctx: ReduceContext): (State, { Effect }, Result)

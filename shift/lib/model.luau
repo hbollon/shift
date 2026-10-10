@@ -11,6 +11,7 @@ type Session = Types.Session
 type Settings = Types.Settings
 type Snapshot = Types.Snapshot
 type State = Types.State
+type UndoEntry = Types.UndoEntry
 
 local Model = {}
 
@@ -19,6 +20,11 @@ local MINUTE_MS = 60 * 1000
 
 -- Snapshot schema version (spec §9.3); fields are only ever added within a version.
 Model.SNAPSHOT_VERSION = 1
+
+-- Undo (spec §6.8.4): an action can be undone for 10 minutes, from any surface, and
+-- consecutive undos chain while the entries are recent. The stack keeps 20 entries.
+Model.UNDO_WINDOW_S = 10 * 60
+Model.UNDO_DEPTH = 20
 
 -- Settings -------------------------------------------------------------------
 
@@ -129,6 +135,17 @@ function Model.addSession(day: Day, session: Session): (boolean, string?)
   return true
 end
 
+-- Removes a session by id; returns whether it was there.
+function Model.removeSession(day: Day, id: string): boolean
+  for i, session in day.sessions do
+    if session.id == id then
+      table.remove(day.sessions, i)
+      return true
+    end
+  end
+  return false
+end
+
 function Model.hasSession(day: Day, id: string): boolean
   for _, session in day.sessions do
     if session.id == id then
@@ -146,6 +163,18 @@ function Model.closedWorkedMs(day: Day?): number
     end
   end
   return total
+end
+
+-- Undo -----------------------------------------------------------------------
+
+-- The action an undo would revert now: the top of the stack, if inside the window.
+function Model.undoable(state: State, nowS: number): UndoEntry?
+  local stack = state.undo
+  local top = stack and stack[#stack]
+  if top and nowS - top.atS < Model.UNDO_WINDOW_S then
+    return top
+  end
+  return nil
 end
 
 -- Snapshot -------------------------------------------------------------------
@@ -184,6 +213,13 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
     weekTarget += Model.targetMs(key, settings, meta)
   end
 
+  local sessions = {}
+  for _, session in todayRecord and todayRecord.sessions or {} do
+    table.insert(sessions, { startS = session.startS, endS = session.endS })
+  end
+
+  local undo = Model.undoable(ctx.state, ctx.nowS)
+
   return {
     v = Model.SNAPSHOT_VERSION,
     status = open and "working" or "off",
@@ -195,8 +231,16 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
       removedInOpenMs = 0,
       targetMs = Model.targetMs(today, settings, meta),
       isWorkday = settings.workdays[Time.weekday(today)] == true,
+      sessions = sessions,
     },
     week = { workedMs = weekWorked, targetMs = weekTarget },
+    undo = undo and { id = undo.id, action = undo.action, atS = undo.atS } or nil,
+    contract = {
+      weeklyHours = settings.weeklyHours,
+      workdays = settings.workdays,
+      dailyTargetMs = Model.dailyTargetMs(settings),
+    },
+    flags = { firstRun = not ctx.state.firstRunDismissed },
     display = { durationFormat = settings.durationFormat },
   }
 end

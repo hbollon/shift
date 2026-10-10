@@ -82,6 +82,16 @@ t.describe("model.sessions", function()
     t.expect(#day.sessions).toBe(3)
     t.expect(Model.closedWorkedMs(day)).toBe(9 * H)
     t.expect(Model.hasSession(day, Model.sessionId(at("2026-10-09", 12)))).toBe(true)
+    t.expect(Model.removeSession(day, Model.sessionId(at("2026-10-09", 12)))).toBe(true)
+    t.expect(Model.removeSession(day, "s_missing")).toBe(false)
+    t.expect(#day.sessions).toBe(2)
+  end)
+
+  t.it("exposes the top undo entry only inside the window", function()
+    local state = { schema = 1, undo = { { id = "a", action = "checkin", atS = 100 }, { id = "b", action = "checkin", atS = 200 } } }
+    t.expect((Model.undoable(state, 200 + Model.UNDO_WINDOW_S - 1) :: any).id).toBe("b")
+    t.expect(Model.undoable(state, 200 + Model.UNDO_WINDOW_S)).toBeNil()
+    t.expect(Model.undoable({ schema = 1 }, 0)).toBeNil()
   end)
 end)
 
@@ -108,9 +118,13 @@ t.describe("model.snapshot", function()
       removedInOpenMs = 0,
       targetMs = 7 * H,
       isWorkday = true,
+      sessions = {},
     })
     t.expect(snap.week).toEqual({ workedMs = 0, targetMs = 35 * H })
     t.expect(snap.display).toEqual({ durationFormat = "colon" })
+    t.expect(snap.contract.dailyTargetMs).toBe(7 * H)
+    t.expect(snap.flags).toEqual({ firstRun = true })
+    t.expect(snap.undo).toBeNil()
   end)
 
   t.it("sums closed sessions of today and of the week", function()
@@ -124,6 +138,15 @@ t.describe("model.snapshot", function()
     t.expect(snap.today.workedClosedMs).toBe(3 * H + 30 * M)
     t.expect(snap.today.openStartMs).toBe(open.startS * 1000)
     t.expect(snap.week.workedMs).toBe(11 * H + 30 * M)
+    t.expect(snap.today.sessions).toEqual({ { startS = at("2026-10-09", 8, 30), endS = at("2026-10-09", 12) } })
+  end)
+
+  t.it("publishes the action an undo would revert", function()
+    local state = { open = nil, firstRunDismissed = true, undo = { { id = "checkout:s_1", action = "checkout", atS = at("2026-10-09", 14, 55) } } }
+    local snap = snapshotAt(at("2026-10-09", 15), state, {})
+    t.expect(snap.undo).toEqual({ id = "checkout:s_1", action = "checkout", atS = at("2026-10-09", 14, 55) })
+    t.expect(snap.flags.firstRun).toBe(false)
+    t.expect(snapshotAt(at("2026-10-09", 16), state, {}).undo).toBeNil()
   end)
 
   t.it("reports when the user stopped working", function()
