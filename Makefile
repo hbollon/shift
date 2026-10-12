@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 LUAU_LSP := .tools/bin/luau-lsp
 LUAU_SOURCES = $(shell find shift tests -name '*.luau')
 
-.PHONY: help tools test analyze lint validate catalog catalog-check check clean
+.PHONY: help tools test analyze lint validate catalog catalog-check check dev-install dev-uninstall clean
 
 # Keep output readable even with a global `make -j`.
 .NOTPARALLEL:
@@ -38,6 +38,12 @@ catalog-check: ## Fail if catalog.toml is out of date
 	@scripts/catalog.py --check
 
 check: test analyze validate catalog-check lint ## Run every check (what CI runs, plus lint)
+
+dev-install: ## Run this checkout on the running Noctalia (source, enable, widget, tile)
+	@scripts/dev-install.py install
+
+dev-uninstall: ## Undo dev-install, keeping Shift's data
+	@scripts/dev-install.py uninstall
 
 clean: ## Remove build output
 	@rm -rf build

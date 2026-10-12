@@ -31,13 +31,25 @@ your editor settings (kept local, `.vscode/` is git-ignored), e.g. for VS Code:
 
 ## Running the plugin from your checkout
 
+With Noctalia v5 running:
+
+```sh
+make dev-install     # adds the checkout as a plugin source, enables Shift, adds the bar widget and control-center tile
+make dev-uninstall   # undoes it; Shift's data is kept
+```
+
+The widget and tile are only added when no bar or shortcut has them yet, through a generated
+`~/.config/noctalia/zz-shift-dev.toml`. Doing it by hand:
+
 ```sh
 noctalia msg plugins source add shift-dev path ~/path/to/shift
 noctalia msg plugins enable hbollon/shift
 ```
 
+then add the widget to a bar with `type = "hbollon/shift:bar"`.
+
 `.luau` edits hot-reload; manifest changes are picked up on the next config reload (`noctalia msg config-reload`).
-Add the widget to a bar with `type = "hbollon/shift:bar"`, and drive entries over IPC:
+Drive entries over IPC:
 
 ```sh
 noctalia msg panel-toggle hbollon/shift:dashboard
