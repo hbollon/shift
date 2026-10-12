@@ -3,7 +3,9 @@
     "working": "Working",
     "working_since": "Working since {time}",
     "off": "Off",
-    "off_since": "Off since {time}"
+    "off_since": "Off since {time}",
+    "away": "Away",
+    "away_since": "Away since {time}"
   },
   "days": {
     "short": {
@@ -25,7 +27,15 @@
       "overtime": "Overtime",
       "week": "This week",
       "of_target": "{worked} / {target}",
-      "remaining_eta": "{remaining} (until ~{time})"
+      "remaining_eta": "{remaining} (until ~{time})",
+      "pending": "Pending",
+      "pending_count": {
+        "one": "{count} absence to review",
+        "other": "{count} absences to review"
+      },
+      "suggestion": "Suggestion",
+      "suggest_checkin": "Check in?",
+      "suggest_checkout": "Check out?"
     }
   },
   "panel": {
@@ -37,11 +47,17 @@
     "status": {
       "working_since": "Working since {time}",
       "off_since": "Off · last session ended {time}",
-      "off": "Off"
+      "off": "Off",
+      "away_for": {
+        "one": "Away for {count} min",
+        "other": "Away for {count} min"
+      },
+      "away_since": "Away since {time}"
     },
     "undo": {
       "checkin": "Undo check in at {time}",
-      "checkout": "Undo check out at {time}"
+      "checkout": "Undo check out at {time}",
+      "resolve": "Undo absence decision at {time}"
     },
     "welcome": {
       "title": "Welcome to Shift",
@@ -66,11 +82,87 @@
       "title": "Today",
       "empty": "No sessions yet today.",
       "range": "{from} – {to}",
-      "now": "now"
+      "now": "now",
+      "absence": {
+        "kept": "Away, counted",
+        "removed": "Away, removed",
+        "pending": "Away, to review"
+      }
     },
     "errors": {
       "command": "Shift did not respond. Try again.",
       "undo_expired": "This action can no longer be undone."
+    },
+    "attention": {
+      "away": "Away {from} → {to} ({duration})",
+      "signal": {
+        "idle": "Inactive",
+        "lock": "Locked screen",
+        "sleep": "Asleep",
+        "gap": "Shift was not running"
+      },
+      "keep": "Count as work",
+      "remove": "Remove",
+      "suggest_checkin": "It’s {time}, within your work hours. Start your shift?",
+      "suggest_checkout": "Your work hours are over. Check out?",
+      "not_now": "Not now",
+      "more": {
+        "one": "+{count} more",
+        "other": "+{count} more"
+      },
+      "rule_errors": {
+        "one": "{count} automation setting is invalid and ignored",
+        "other": "{count} automation settings are invalid and ignored"
+      },
+      "edit_settings": "Edit in settings",
+      "swayidle": "Install swayidle to detect when you are away from the keyboard.",
+      "dismiss": "Dismiss",
+      "minutes": {
+        "one": "{count} min",
+        "other": "{count} min"
+      }
+    },
+    "automation": {
+      "preset": {
+        "manual": "Manual",
+        "assisted": "Assisted",
+        "automatic": "Automatic",
+        "custom": "Custom"
+      },
+      "manual_summary": "Manual · automation off",
+      "idle": "Idle {minutes} min",
+      "window": "{days} {from}–{to}",
+      "no_window": "No window",
+      "rules": {
+        "one": "+{count} rule",
+        "other": "+{count} rules"
+      },
+      "details": "Automation details",
+      "backends": "Signals",
+      "backend": {
+        "idle": "Idle detection",
+        "logind": "Lock & sleep"
+      },
+      "health": {
+        "ok": "Running",
+        "poll": "Polling",
+        "external": "External (IPC)",
+        "unavailable": "Unavailable",
+        "error": "Failing",
+        "off": "Off"
+      },
+      "preview": "Window this week",
+      "errors": "Invalid settings",
+      "error_line": "{setting}: “{text}” — {reason}",
+      "error_rule": "Rule {index}",
+      "reason": {
+        "time": "not a valid time (HH:MM)",
+        "order": "the end must be after the start",
+        "syntax": "expected “+ selector [HH:MM-HH:MM]”",
+        "selector": "unknown days",
+        "date": "not a valid date (YYYY-MM-DD)",
+        "range": "the range ends before it starts"
+      }
     }
   },
   "tile": {
@@ -138,6 +230,83 @@
       "show": "Show normally",
       "dim": "Dim",
       "hide": "Hide"
+    },
+    "automation": {
+      "label": "Automation",
+      "description": "Manual: you check in and out yourself. Assisted: Shift suggests check-ins and asks about absences. Automatic: Shift checks you in and out within your work hours.",
+      "manual": "Manual",
+      "assisted": "Assisted",
+      "automatic": "Automatic",
+      "custom": "Custom"
+    },
+    "window_start": {
+      "label": "Work hours start",
+      "description": "HH:MM. Automation acts only within your work hours, on your workdays."
+    },
+    "window_end": {
+      "label": "Work hours end",
+      "description": "HH:MM (24:00 allowed)."
+    },
+    "window_exclude_holidays": {
+      "label": "Not on public holidays",
+      "description": "Public holidays are outside your work hours."
+    },
+    "extra_rules": {
+      "label": "Additional rules",
+      "description": "One rule per line: \"+\" adds time, \"-\" removes it. Examples: \"- * 12:00-13:30\" (lunch), \"- fri 16:00-24:00\", \"+ sat 09:00-12:00\", \"- 2026-12-24..2027-01-02\"."
+    },
+    "auto_checkin": {
+      "label": "Check in",
+      "description": "When you start using your computer within your work hours."
+    },
+    "auto_checkout": {
+      "label": "Check out",
+      "description": "When your work hours end. Sessions started outside them are left alone."
+    },
+    "auto_mode": {
+      "off": "Off",
+      "suggest": "Suggest",
+      "auto": "Automatically"
+    },
+    "idle_action": {
+      "label": "When inactive",
+      "description": "What to do when you have been away from the keyboard."
+    },
+    "lock_action": {
+      "label": "When the screen is locked",
+      "description": "What to do with the time the screen stayed locked."
+    },
+    "sleep_action": {
+      "label": "When asleep or offline",
+      "description": "What to do with the time the computer slept, or Shift was not running."
+    },
+    "absence_action": {
+      "ignore": "Count it as work",
+      "ask": "Ask me",
+      "deduct": "Remove it",
+      "checkout": "Check out"
+    },
+    "idle_timeout_min": {
+      "label": "Inactive after (minutes)",
+      "description": "Minutes without keyboard or mouse input before you count as away."
+    },
+    "min_absence_min": {
+      "label": "Shortest absence (minutes)",
+      "description": "Shorter breaks count as work and are not recorded."
+    },
+    "unresolved_absence": {
+      "label": "Unreviewed absences",
+      "description": "What happens at the end of the day to absences you did not review.",
+      "keep": "Count them as work",
+      "remove": "Remove them"
+    },
+    "idle_backend": {
+      "label": "Idle detection",
+      "description": "Auto uses swayidle when installed. External expects \"signal idle\" and \"signal active\" over IPC.",
+      "auto": "Auto",
+      "swayidle": "swayidle",
+      "external": "External (IPC)",
+      "off": "Off"
     }
   },
   "errors": {

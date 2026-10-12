@@ -15,7 +15,7 @@ license      = "MIT"
 icon         = "briefcase"
 description  = "Track your work hours: one-click check in/out, smart automation, daily target and overtime balance."
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
-dependencies = []
+dependencies = ["swayidle"] # optional: idle detection
 
 # --- Settings ------------------------------------------------------------------
 
@@ -109,6 +109,170 @@ options = [
   { value = "colon", label_key = "settings.duration_format.colon" },
   { value = "units", label_key = "settings.duration_format.units" },
   { value = "decimal", label_key = "settings.duration_format.decimal" },
+]
+
+# Automation (spec §6.3, §8.3). Everything below is hidden with the manual preset; the
+# individual behaviors are shown for the custom one.
+
+[[setting]]
+key             = "automation"
+type            = "select"
+label_key       = "settings.automation.label"
+description_key = "settings.automation.description"
+default         = "assisted"
+options = [
+  { value = "manual", label_key = "settings.automation.manual" },
+  { value = "assisted", label_key = "settings.automation.assisted" },
+  { value = "automatic", label_key = "settings.automation.automatic" },
+  { value = "custom", label_key = "settings.automation.custom" },
+]
+
+[[setting]]
+key             = "window_start"
+type            = "string"
+label_key       = "settings.window_start.label"
+description_key = "settings.window_start.description"
+default         = "08:00"
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "window_end"
+type            = "string"
+label_key       = "settings.window_end.label"
+description_key = "settings.window_end.description"
+default         = "19:00"
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "window_exclude_holidays"
+type            = "bool"
+label_key       = "settings.window_exclude_holidays.label"
+description_key = "settings.window_exclude_holidays.description"
+default         = true
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "extra_rules"
+type            = "string_list"
+label_key       = "settings.extra_rules.label"
+description_key = "settings.extra_rules.description"
+default         = []
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "auto_checkin"
+type            = "select"
+label_key       = "settings.auto_checkin.label"
+description_key = "settings.auto_checkin.description"
+default         = "suggest"
+visible_when    = { key = "automation", values = ["custom"] }
+options = [
+  { value = "off", label_key = "settings.auto_mode.off" },
+  { value = "suggest", label_key = "settings.auto_mode.suggest" },
+  { value = "auto", label_key = "settings.auto_mode.auto" },
+]
+
+[[setting]]
+key             = "auto_checkout"
+type            = "select"
+label_key       = "settings.auto_checkout.label"
+description_key = "settings.auto_checkout.description"
+default         = "suggest"
+visible_when    = { key = "automation", values = ["custom"] }
+options = [
+  { value = "off", label_key = "settings.auto_mode.off" },
+  { value = "suggest", label_key = "settings.auto_mode.suggest" },
+  { value = "auto", label_key = "settings.auto_mode.auto" },
+]
+
+[[setting]]
+key             = "idle_action"
+type            = "select"
+label_key       = "settings.idle_action.label"
+description_key = "settings.idle_action.description"
+default         = "ask"
+visible_when    = { key = "automation", values = ["custom"] }
+options = [
+  { value = "ignore", label_key = "settings.absence_action.ignore" },
+  { value = "ask", label_key = "settings.absence_action.ask" },
+  { value = "deduct", label_key = "settings.absence_action.deduct" },
+  { value = "checkout", label_key = "settings.absence_action.checkout" },
+]
+
+[[setting]]
+key             = "lock_action"
+type            = "select"
+label_key       = "settings.lock_action.label"
+description_key = "settings.lock_action.description"
+default         = "ask"
+visible_when    = { key = "automation", values = ["custom"] }
+options = [
+  { value = "ignore", label_key = "settings.absence_action.ignore" },
+  { value = "ask", label_key = "settings.absence_action.ask" },
+  { value = "deduct", label_key = "settings.absence_action.deduct" },
+  { value = "checkout", label_key = "settings.absence_action.checkout" },
+]
+
+[[setting]]
+key             = "sleep_action"
+type            = "select"
+label_key       = "settings.sleep_action.label"
+description_key = "settings.sleep_action.description"
+default         = "ask"
+visible_when    = { key = "automation", values = ["custom"] }
+options = [
+  { value = "ignore", label_key = "settings.absence_action.ignore" },
+  { value = "ask", label_key = "settings.absence_action.ask" },
+  { value = "deduct", label_key = "settings.absence_action.deduct" },
+  { value = "checkout", label_key = "settings.absence_action.checkout" },
+]
+
+[[setting]]
+key             = "idle_timeout_min"
+type            = "int"
+label_key       = "settings.idle_timeout_min.label"
+description_key = "settings.idle_timeout_min.description"
+default         = 5
+min             = 1
+max             = 120
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "min_absence_min"
+type            = "int"
+label_key       = "settings.min_absence_min.label"
+description_key = "settings.min_absence_min.description"
+default         = 15
+min             = 1
+max             = 240
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "unresolved_absence"
+type            = "select"
+label_key       = "settings.unresolved_absence.label"
+description_key = "settings.unresolved_absence.description"
+default         = "keep"
+advanced        = true
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+options = [
+  { value = "keep", label_key = "settings.unresolved_absence.keep" },
+  { value = "remove", label_key = "settings.unresolved_absence.remove" },
+]
+
+[[setting]]
+key             = "idle_backend"
+type            = "select"
+label_key       = "settings.idle_backend.label"
+description_key = "settings.idle_backend.description"
+default         = "auto"
+advanced        = true
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+options = [
+  { value = "auto", label_key = "settings.idle_backend.auto" },
+  { value = "swayidle", label_key = "settings.idle_backend.swayidle" },
+  { value = "external", label_key = "settings.idle_backend.external" },
+  { value = "off", label_key = "settings.idle_backend.off" },
 ]
 
 # --- Entries -------------------------------------------------------------------

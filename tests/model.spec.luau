@@ -30,7 +30,47 @@ t.describe("model.settings", function()
       workdays = { true, true, true, true, true, false, false },
       dayStartHour = 4,
       durationFormat = "colon",
+      preset = "assisted",
+      autoCheckin = "suggest",
+      autoCheckout = "suggest",
+      actions = { idle = "ask", lock = "ask", sleep = "ask" },
+      idleTimeoutMin = 5,
+      minAbsenceMin = 15,
+      unresolvedAbsence = "keep",
+      idleBackend = "auto",
+      window = { start = "08:00", ["end"] = "19:00", excludeHolidays = true, extraRules = {} },
     })
+  end)
+
+  t.it("applies automation presets", function()
+    local manual = settingsFrom({ automation = "manual", auto_checkin = "auto", idle_action = "deduct" })
+    t.expect(manual.autoCheckin).toBe("off")
+    t.expect(manual.actions).toEqual({ idle = "ignore", lock = "ignore", sleep = "ignore" })
+    t.expect(Model.usesSignals(manual)).toBe(false)
+    local automatic = settingsFrom({ automation = "automatic" })
+    t.expect(automatic.autoCheckin).toBe("auto")
+    t.expect(automatic.autoCheckout).toBe("auto")
+    t.expect(Model.usesSignals(automatic)).toBe(true)
+  end)
+
+  t.it("reads individual behaviors with the custom preset", function()
+    local custom = settingsFrom({
+      automation = "custom",
+      auto_checkin = "auto",
+      auto_checkout = "off",
+      idle_action = "ignore",
+      lock_action = "deduct",
+      sleep_action = "bogus",
+    })
+    t.expect(custom.autoCheckin).toBe("auto")
+    t.expect(custom.autoCheckout).toBe("off")
+    t.expect(custom.actions).toEqual({ idle = "ignore", lock = "deduct", sleep = "ask" })
+  end)
+
+  t.it("keeps only the string rules of the list", function()
+    local settings = settingsFrom({ extra_rules = { "- * 12:00-13:00", 42 }, window_end = "18:30" })
+    t.expect(settings.window.extraRules).toEqual({ "- * 12:00-13:00" })
+    t.expect(settings.window["end"]).toBe("18:30")
   end)
 
   t.it("resolves work week presets and custom days", function()
@@ -87,6 +127,24 @@ t.describe("model.sessions", function()
     t.expect(#day.sessions).toBe(2)
   end)
 
+  t.it("subtracts removed absences from worked time", function()
+    local day = Model.newDay()
+    Model.addSession(day, session("2026-10-09", 9, 0, 12, 0))
+    local function absence(id, fromH, toH, status)
+      return { id = id, startS = at("2026-10-09", fromH), endS = at("2026-10-09", toH), signals = { "lock" }, status = status, resolvedBy = "user" }
+    end
+    Model.addAbsence(day, absence("a_2", 14, 15, "removed"))
+    Model.addAbsence(day, absence("a_1", 10, 11, "removed"))
+    Model.addAbsence(day, absence("a_3", 11, 12, "kept"))
+    t.expect(day.absences[1].id).toBe("a_1")
+    t.expect(Model.closedWorkedMs(day)).toBe(1 * H)
+    -- The 14:00 absence belongs to a session still open since 13:00.
+    t.expect(Model.closedWorkedMs(day, at("2026-10-09", 13))).toBe(2 * H)
+    t.expect(Model.removedInOpenMs(day, at("2026-10-09", 13))).toBe(1 * H)
+    t.expect(Model.removeAbsence(day, "a_1")).toBe(true)
+    t.expect(Model.removeAbsence(day, "a_1")).toBe(false)
+  end)
+
   t.it("exposes the top undo entry only inside the window", function()
     local state = { schema = 1, undo = { { id = "a", action = "checkin", atS = 100 }, { id = "b", action = "checkin", atS = 200 } } }
     t.expect((Model.undoable(state, 200 + Model.UNDO_WINDOW_S - 1) :: any).id).toBe("b")
@@ -105,6 +163,7 @@ t.describe("model.snapshot", function()
       dayOf = function(key)
         return days[key]
       end,
+      automation = {} :: any,
     })
   end
 
@@ -119,7 +178,10 @@ t.describe("model.snapshot", function()
       targetMs = 7 * H,
       isWorkday = true,
       sessions = {},
+      absences = {},
     })
+    t.expect(snap.pending).toEqual({})
+    t.expect(snap.suggestion).toBeNil()
     t.expect(snap.week).toEqual({ workedMs = 0, targetMs = 35 * H })
     t.expect(snap.display).toEqual({ durationFormat = "colon" })
     t.expect(snap.contract.dailyTargetMs).toBe(7 * H)
@@ -154,6 +216,54 @@ t.describe("model.snapshot", function()
     Model.addSession(friday, session("2026-10-09", 8, 30, 12, 0))
     local snap = snapshotAt(at("2026-10-09", 15), {}, { ["2026-10-09"] = friday })
     t.expect(snap.since).toBe(at("2026-10-09", 12))
+  end)
+
+  t.it("reports absences, pending ones and the away status", function()
+    local friday = Model.newDay()
+    local open = { id = "s_x", startS = at("2026-10-09", 9), origin = "manual" }
+    Model.addAbsence(friday, {
+      id = "a_1",
+      startS = at("2026-10-09", 10),
+      endS = at("2026-10-09", 10, 30),
+      signals = { "idle" },
+      status = "removed",
+      resolvedBy = "user",
+    })
+    local state = {
+      open = open,
+      pending = { { id = "a_2", date = "2026-10-09", startS = at("2026-10-09", 11), endS = at("2026-10-09", 12), signals = { "idle", "lock" } } },
+      absence = { startS = at("2026-10-09", 14), signals = { "lock" } },
+      suggestion = { kind = "checkout" },
+    }
+    local snap = snapshotAt(at("2026-10-09", 14, 20), state, { ["2026-10-09"] = friday })
+    t.expect(snap.status).toBe("away")
+    t.expect(snap.since).toBe(at("2026-10-09", 14))
+    t.expect(snap.today.removedInOpenMs).toBe(30 * M)
+    t.expect(snap.today.workedClosedMs).toBe(0)
+    t.expect(snap.pending).toEqual({ { id = "a_2", startS = at("2026-10-09", 11), endS = at("2026-10-09", 12), signal = "lock" } })
+    t.expect(snap.today.absences).toEqual({
+      { startS = at("2026-10-09", 10), endS = at("2026-10-09", 10, 30), status = "removed" },
+      { startS = at("2026-10-09", 11), endS = at("2026-10-09", 12), status = "pending" },
+    })
+    t.expect(snap.suggestion).toBe("checkout")
+  end)
+
+  t.it("stays working while an ignored absence is in progress", function()
+    local open = { id = "s_x", startS = at("2026-10-09", 9), origin = "manual" }
+    local manual = settingsFrom({ automation = "manual" })
+    local state: any = { open = open, absence = { startS = at("2026-10-09", 10), signals = { "idle" } } }
+    t.expect(Model.status(state, manual)).toBe("working")
+    t.expect(Model.status(state, DEFAULTS)).toBe("away")
+    t.expect(Model.status({} :: any, DEFAULTS)).toBe("off")
+  end)
+
+  t.it("ranks signals to pick the absence action", function()
+    t.expect(Model.strongestSignal({ "idle", "lock" })).toBe("lock")
+    t.expect(Model.strongestSignal({ "lock", "gap", "idle" })).toBe("gap")
+    local custom = settingsFrom({ automation = "custom", idle_action = "ignore", lock_action = "deduct", sleep_action = "checkout" })
+    t.expect(Model.absenceAction(custom, { "idle" })).toBe("ignore")
+    t.expect(Model.absenceAction(custom, { "idle", "lock" })).toBe("deduct")
+    t.expect(Model.absenceAction(custom, { "gap" })).toBe("checkout")
   end)
 
   t.it("counts an open session toward the workday it started on", function()

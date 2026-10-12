@@ -243,6 +243,13 @@ Backend health (running / unavailable / error + reason) is part of the snapshot 
 `idle_backend = auto` picks `swayidle` when `commandExists("swayidle")`, else disables idle detection and shows a
 one-time hint ("Install swayidle to enable idle detection").
 
+`runStream` neither reports the end of a process nor stops one before the plugin reloads, so each stream runs as
+`echo "<marker> pid $$"; <command>; echo "<marker> exit $?"` (`lib/signals/stream.luau`, D34): the first line gives
+the process group, which `kill -TERM -- -<pid>` stops when the idle settings change, and the last one reports a crash.
+A crashed stream restarts after 1, 2, 4, 8, then 16 s; after 5 restarts within a minute its backend is marked `error`
+and retried every 5 minutes. The `active`/`idle` debounce holds each `active` for 2 s: an `idle` arriving meanwhile
+drops both, and the absence keeps its earlier start. With the `manual` preset no process is started.
+
 #### 6.3.3 Schedule rules (windows)
 
 Rules define **when automation may act**. They do *not* define the contract (that is `weekly_hours` + workdays,
@@ -330,7 +337,9 @@ Sessions opened manually **outside** any window are never auto-closed by window 
 - A manual check-in outside a window marks the session as manual: window edges will not close it.
 - A manual check-in inside a segment cancels a pending check-out suggestion for that segment.
 
-Overrides are kept in `state.json` so they survive restarts.
+Overrides are kept in `state.json` so they survive restarts. A settings change is not an edge: the window is evaluated
+afresh and pending suggestions are dropped. An edge passed while the service was not running is applied at the next
+tick, at the edge time.
 
 #### 6.3.5 Absence handling
 
@@ -481,6 +490,8 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
   naming it, "Undo check out at 17:02"), `ctrl+z` in the panel, and IPC (`undo`). Consecutive undos chain while the
   entries are younger than 10 minutes; older entries stay in the stack but are never undone, so an action from this
   morning cannot be reverted by mistake.
+- Absence decisions are undone back to *pending*; an automatic `deduct` counts as a decision. The stack is cleared at
+  the workday rollover, whose closing of a forgotten session is reviewed in the day editor instead.
 - Undo commands from the UIs name the entry they revert (`{ type = "undo", id = "checkout:s_…" }`): delivered twice,
   the second finds another entry on top and does nothing (§9.3). IPC `undo` reverts the top entry.
 
@@ -618,7 +629,9 @@ or state changes).
 ### 7.4 Panel (`hbollon/shift:dashboard`)
 
 Manifest defaults: `width = 400`, `height = 660`, `placement = "attached"`, `position = "auto"`,
-`open_near_click = true`. Second ticks are enabled while open.
+`open_near_click = true`. Second ticks are enabled while open. The header and status chip stay at the top and the
+automation footer at the bottom; everything between them (attention cards, hero, stat tiles, tabs) scrolls when it
+does not fit (D35).
 
 ```
 ┌────────────────────────────────────────────┐
@@ -677,9 +690,8 @@ opens the relevant tab.
 #### 7.4.5 Tabs
 - **Today**: day timeline (a row of proportional `ui.box` segments from `day_start_hour` to now, sessions in
   `primary`, kept absences in `primary/0.4`, removed absences hatched via `outline` border, gaps in
-  `surface_variant/0.4`), followed by the session list, most recent first (the running session stays on top). The
-  list shows up to 5 rows and scrolls beyond, so the panel keeps room for the automation footer. Clicking a session
-  opens the day editor.
+  `surface_variant/0.4`, pending absences in `secondary/0.6`), followed by the session list, most recent first (the
+  running session stays on top). A long list scrolls with the panel body. Clicking a session opens the day editor.
 - **History**: week view by default, with a week/month toggle (§6.8.1). Bars use `primary` up to the target and
   `tertiary` above it. A target tick is drawn with an `outline` 1 px box. Holidays show `beach`, missing days show
   a `secondary` dot. Container tooltips show exact values.
@@ -689,9 +701,9 @@ opens the relevant tab.
   It also has an editable *Tracking since* and *Initial balance* (with confirmation, since they change the balance).
 
 #### 7.4.6 Automation footer
-A one-line summary: preset · idle timeout · condensed window. A **ⓘ** opens an expandable section with backend health
-(idle: swayidle ✓ / unavailable; lock & sleep: logind ✓), the 7 × 24 window preview strip, rule errors, and
-**[Edit in settings]**.
+A one-line summary: preset · idle timeout · condensed window · number of additional rules. A **ⓘ** replaces the panel
+body with the automation details: backend health (idle: swayidle ✓ / unavailable; lock & sleep: logind ✓), the
+7 × 24 window preview strip, rule errors, and **[Edit in settings]**; the same button closes them.
 
 #### 7.4.7 Keyboard
 Standard focus/Enter/Space navigation (host-provided). `capture_keys = ["ctrl+z"]` triggers Undo while the panel
@@ -827,6 +839,7 @@ unit-testable with the standalone `luau` CLI.
 | `lib/model.luau` | ✓ | Sessions/absences ops, invariants, counters, targets, balance, contract history |
 | `lib/automation.luau` | ✓ | Reducer `(state, event, config, now) → (state', effects)` for check-in/out, absences, overrides, rollover |
 | `lib/store.luau` | – | Load/save, atomic writes, schema migrations, backups |
+| `lib/signals/stream.luau` | – | Long-lived command wrapper: process group, exit detection, restarts with backoff, stop |
 | `lib/signals/idle.luau` | – | swayidle stream lifecycle, external backend |
 | `lib/signals/logind.luau` | – | Session path resolution, gdbus monitor parsing, loginctl polling fallback |
 | `lib/holidays.luau` | – | Fetch, cache, region filter |
@@ -856,16 +869,20 @@ deterministic and fully testable with a fake clock.
     targetMs = 25200000,
     isWorkday = true, holiday = nil,
     sessions = { { startS = 1791529020, endS = 1791541860 } }, -- closed sessions, for the Today view
+    absences = { { startS = 1791540720, endS = 1791543240, status = "pending" } }, -- kept | removed | pending
   },
   week = { workedMs = 101400000, targetMs = 126000000 }, -- closed sessions; UIs add the open one
   balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
-  pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } },
+  pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } }, -- strongest signal
   suggestion = nil,            -- "checkin" | "checkout"
   undo = { id = "checkout:s_tmn2rc", action = "checkout", atS = 1791558120 }, -- nil after 10 min; UIs build the label
   automation = {
     preset = "assisted", idleMin = 5,
-    backends = { idle = "ok", logind = "ok", holidays = "ok" },
-    ruleErrors = {}, windowSummary = "Mon–Fri 08:00–19:00",
+    window = { start = "08:00", ["end"] = "19:00", extraRules = 1 }, -- UIs build the summary with the contract days
+    backends = { idle = "ok", logind = "ok", holidays = "ok" }, -- ok | poll | external | unavailable | error | off
+    ruleErrors = { { setting = "extra_rules", index = 2, text = "- monday", reason = "selector" } },
+    preview = { "000000004444024444400000", … }, -- 7 days × 24 hours, quarters inside the window
+    hints = { "swayidle" },    -- one-time hints not dismissed yet
   },
   contract = { weeklyHours = 35, workdays = { true, true, true, true, true, false, false }, dailyTargetMs = 25200000 },
   flags = { firstRun = false, needsReview = { "2026-10-07" } },
@@ -926,7 +943,8 @@ backups/daily/YYYY-MM-DD/    # full copy of all data files, 30 most recent kept
 backups/monthly/YYYY-MM/     # first daily backup of each month, 12 most recent kept
 ```
 
-Per-year ledgers keep writes small and bounded.
+Per-year ledgers keep writes small and bounded. Pending absences stay in `state.json` until resolved, like the open
+session until check-out (D33); a resolved absence moves to the ledger with its status.
 
 **Backups.** Once per day, on the first tick of a new workday, the service copies **all** data files (`state.json`,
 `balance.json`, every `ledger/*.json`) into `backups/daily/<date>/`. The first daily backup of a month is also kept
@@ -941,11 +959,18 @@ schema migration, whatever the date.
 {
   "schema": 1,
   "heartbeatS": 1791547380,
+  "workday": "2026-10-09",                                              // last workday seen, for the rollover
   "open": { "id": "s_01", "startS": 1791547320, "origin": "manual" }, // origin: manual | auto
+  "lastActivityS": 1791547380,
+  "presence": { "idle": false, "locked": true },                       // what the signals say; absent = unknown
   "absence": { "startS": 1791540720, "signals": ["idle", "lock"] },    // in-progress candidate or null
+  "pending": [ { "id": "a_7b", "date": "2026-10-09", "startS": 1791540720, "endS": 1791543240, "signals": ["lock"] } ],
+  "window": { "open": true, "untilS": 1791565200 },                    // last evaluation and next edge
   "overrides": { "suppressCheckinUntilS": 1791565200, "manualSession": true },
+  "suggestion": { "kind": "checkin", "untilS": 1791565200 },
   "notified": { "targetReached": "2026-10-09", "suggestSegmentS": 1791525600 },
-  "undo": [ { "label": "...", "op": { /* inverse command */ }, "atS": 1791558120 } ],
+  "undo": [ { "id": "checkout:s_01", "action": "checkout", "atS": 1791558120, /* what to revert */ } ],
+  "hints": { "swayidle": true },                                       // dismissed one-time hints
   "firstRunDismissed": true
 }
 
@@ -1044,7 +1069,7 @@ listener {
 | Reliability | No data loss on crash/power loss beyond the last 60 s heartbeat. Atomic writes. Full daily backups (30 daily + 12 monthly). |
 | Performance | Service tick ≤ 2 ms typical. No disk I/O on idle ticks. UIs never block on I/O. |
 | Privacy | All data stays local. The only network call is the holidays API (disableable, offline-mode aware). No telemetry. Every process spawn and network call is listed in the README and in the community-plugins PR. |
-| Security | Spawned commands use the argv form (`runAsync({ … })`) whenever values are dynamic. `runStream` command strings only interpolate validated integers. No remote code. No obfuscation. |
+| Security | Spawned commands use the argv form (`runAsync({ … })`) whenever values are dynamic. `runStream` command strings only interpolate validated integers and the stream's own generated marker; `kill` only receives a process group read from that marker's line. No remote code. No obfuscation. |
 | Compatibility | `plugin_api = 32` (Noctalia ≥ 5.2.0). All compositors supported by Noctalia (idle requires `ext-idle-notify-v1` + swayidle). |
 | Theming | Zero hex colors. Verified on at least 3 palettes (default dark, default light, a high-contrast custom). |
 | i18n | 100 % of user-facing strings via `tr`. `en.json` complete. CI check that every key exists. |
@@ -1214,3 +1239,6 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D30 | UI → service commands share one key, with per-runtime sender ids, acknowledgement, retry, at-most-once processing and idempotent command types. | State-watch events can be dropped when an entry's queue is full (spike S5). The service cannot enumerate per-sender keys, and idempotency covers a service reload. |
 | D31 | The hero counter is drawn over the ring with a negative-`gap` column, confined to one helper (`lib/ui/overlay.luau`). | Noctalia has no stacking container; the overlay keeps the spec's design, and a breaking host change only touches that helper (fallback: text next to the ring). |
 | D32 | Undo works for 10 minutes from every surface (button, `ctrl+z`, IPC); undos chain while entries are recent. | One rule everywhere, and no risk of reverting an old action by accident. |
+| D33 | Pending absences live in `state.json` until resolved; resolved ones go to the ledger with `kept`/`removed`. | Same model as the open session: the ledger only holds settled facts, and the reducer never reads it. Pending absences only exist for the current workday, since the rollover resolves them. |
+| D34 | Signal streams run inside a small shell wrapper that reports their process group and exit status; the service stops a stream by killing its group. | `runStream` cannot stop a stream nor report its end (S1), and a stale `swayidle` would keep one of the 4 stream slots of the entry until the plugin reloads. |
+| D35 | The panel body scrolls between a fixed header/status and a fixed automation footer, instead of a scrolling session list. | Attention cards come and go; one scroll handles every overflow, and the footer stays reachable. |

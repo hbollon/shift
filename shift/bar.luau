@@ -1,6 +1,7 @@
 --!nonstrict
 -- Shift bar widget (spec §7.3): status glyph · today's worked time · progress ring, live
--- from the core snapshot. Left click opens the dashboard; right click checks in or out.
+-- from the core snapshot. The glyph turns to an attention state for pending absences and
+-- suggestions. Left click opens the dashboard; right click checks in or out.
 
 local Commands = require("./lib/commands.luau")
 local Format = require("./lib/format.luau")
@@ -22,7 +23,7 @@ end)
 
 local function tooltip(snapshot: Types.Snapshot, live: Types.Live, fmt: Types.DurationFormat): { TooltipRow }
   local rows = {}
-  local status = snapshot.status == "working" and "working" or "off"
+  local status = snapshot.status
   local statusText = host.tr("status." .. status)
   if snapshot.since then
     statusText = host.tr("status." .. status .. "_since", { time = Format.clock(host, snapshot.since) })
@@ -50,7 +51,28 @@ local function tooltip(snapshot: Types.Snapshot, live: Types.Live, fmt: Types.Du
     target = Format.duration(live.weekTargetMs, fmt),
   })
   table.insert(rows, { key = host.tr("bar.tooltip.week"), value = week })
+
+  if #snapshot.pending > 0 then
+    table.insert(rows, { key = host.tr("bar.tooltip.pending"), value = host.trp("bar.tooltip.pending_count", #snapshot.pending) })
+  end
+  if snapshot.suggestion then
+    table.insert(rows, { key = host.tr("bar.tooltip.suggestion"), value = host.tr("bar.tooltip.suggest_" .. snapshot.suggestion) })
+  end
   return rows
+end
+
+-- Status glyph (spec §7.3): what needs attention first, then the tracking status.
+local function glyphOf(snapshot: Types.Snapshot): (string, boolean)
+  if #snapshot.pending > 0 then
+    return "clock-exclamation", true
+  elseif snapshot.suggestion == "checkin" then
+    return "clock-play", true
+  elseif snapshot.suggestion == "checkout" then
+    return "clock-pause", true
+  elseif snapshot.status == "away" then
+    return "clock-exclamation", true
+  end
+  return snapshot.status == "working" and "briefcase" or "briefcase-off", false
 end
 
 -- Widget settings (spec §7.3), per bar instance.
@@ -94,11 +116,14 @@ local function render()
   local whenOff = setting("when_off", WHEN_OFF, "dim")
   local fmt = snapshot.display.durationFormat
   local live = Model.live(snapshot, host.nowMs())
-  local working = snapshot.status == "working"
+  local working = snapshot.status ~= "off"
   local muted = not working and whenOff == "dim"
+  local glyph, attention = glyphOf(snapshot)
 
   local glyphColor = "primary"
-  if muted then
+  if attention then
+    glyphColor = "secondary"
+  elseif muted then
     glyphColor = "on_surface_variant"
   elseif live.targetMs > 0 and live.overtimeMs > 0 then
     glyphColor = "tertiary"
@@ -111,10 +136,11 @@ local function render()
 
   local text = counterText(live, setting("value", VALUES, "worked"), fmt, vertical)
   local rows = tooltip(snapshot, live, fmt)
-  local hidden = not working and whenOff == "hide"
+  -- Something to act on keeps the widget visible.
+  local hidden = not working and not attention and whenOff == "hide"
 
   -- Re-render only when what is displayed changes, not on every tick.
-  local parts = { style, text, glyphColor, tostring(working), tostring(vertical), tostring(ring), tostring(hidden) }
+  local parts = { style, text, glyph, glyphColor, tostring(working), tostring(vertical), tostring(ring), tostring(hidden) }
   for _, row in rows do
     table.insert(parts, row.key .. "=" .. row.value)
   end
@@ -127,7 +153,7 @@ local function render()
   barWidget.setVisible(not hidden)
   local children = {}
   if style ~= "minimal" then
-    table.insert(children, ui.glyph({ name = working and "briefcase" or "briefcase-off", color = glyphColor }))
+    table.insert(children, ui.glyph({ name = glyph, color = glyphColor }))
   end
   table.insert(children, ui.label({ text = text, color = muted and "on_surface_variant" or nil }))
   if ring then
@@ -156,6 +182,6 @@ end
 
 -- Explicit check-in/check-out rather than toggle: a retried command stays harmless.
 function onRightClick()
-  local working = snapshot and snapshot.status == "working"
+  local working = snapshot and snapshot.status ~= "off"
   sender.send({ type = working and "checkout" or "checkin" })
 end

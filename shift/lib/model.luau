@@ -5,8 +5,12 @@
 local Time = require("./time.luau")
 local Types = require("./types.luau")
 
+type Absence = Types.Absence
+type AbsenceAction = Types.AbsenceAction
+type AwaySignal = Types.AwaySignal
 type Day = Types.Day
 type Live = Types.Live
+type Status = Types.Status
 type Session = Types.Session
 type Settings = Types.Settings
 type Snapshot = Types.Snapshot
@@ -37,11 +41,38 @@ local WORK_WEEKS = {
 
 local DURATION_FORMATS = { colon = true, units = true, decimal = true }
 
+-- Automation presets (spec §6.3.1); `custom` reads the individual settings.
+local PRESETS = {
+  manual = { autoCheckin = "off", autoCheckout = "off", idle = "ignore", lock = "ignore", sleep = "ignore" },
+  assisted = { autoCheckin = "suggest", autoCheckout = "suggest", idle = "ask", lock = "ask", sleep = "ask" },
+  automatic = { autoCheckin = "auto", autoCheckout = "auto", idle = "ask", lock = "ask", sleep = "ask" },
+}
+local AUTO_MODES = { off = true, suggest = true, auto = true }
+local ACTIONS = { ignore = true, ask = true, deduct = true, checkout = true }
+local IDLE_BACKENDS = { auto = true, swayidle = true, external = true, off = true }
+
 local function number(value: any, default: number, min: number, max: number): number
   if type(value) ~= "number" or value ~= value then
     return default
   end
   return math.clamp(value, min, max)
+end
+
+-- The value when it is one of `allowed`, else `default`.
+local function choice(value: any, allowed: { [string]: boolean }, default: string): any
+  return allowed[value] and value or default
+end
+
+local function strings(value: any): { string }
+  local list = {}
+  if type(value) == "table" then
+    for _, item in value do
+      if type(item) == "string" then
+        table.insert(list, item)
+      end
+    end
+  end
+  return list
 end
 
 -- Reads the settings used by the core from `getConfig`, falling back to the manifest
@@ -60,12 +91,49 @@ function Model.readSettings(getConfig: (key: string) -> any): Settings
       end
     end
   end
+  local preset = choice(getConfig("automation"), { manual = true, assisted = true, automatic = true, custom = true }, "assisted")
+  local behavior = PRESETS[preset]
+  if not behavior then
+    local default = PRESETS.assisted
+    behavior = {
+      autoCheckin = choice(getConfig("auto_checkin"), AUTO_MODES, default.autoCheckin),
+      autoCheckout = choice(getConfig("auto_checkout"), AUTO_MODES, default.autoCheckout),
+      idle = choice(getConfig("idle_action"), ACTIONS, default.idle),
+      lock = choice(getConfig("lock_action"), ACTIONS, default.lock),
+      sleep = choice(getConfig("sleep_action"), ACTIONS, default.sleep),
+    }
+  end
+  local startText, endText = getConfig("window_start"), getConfig("window_end")
   return {
     weeklyHours = number(getConfig("weekly_hours"), 35, 0, 100),
     workdays = workdays or WORK_WEEKS.mon_fri,
     dayStartHour = math.floor(number(getConfig("day_start_hour"), 4, 0, 12)),
-    durationFormat = DURATION_FORMATS[getConfig("duration_format")] and getConfig("duration_format") or "colon",
+    durationFormat = choice(getConfig("duration_format"), DURATION_FORMATS, "colon"),
+    preset = preset,
+    autoCheckin = behavior.autoCheckin,
+    autoCheckout = behavior.autoCheckout,
+    actions = { idle = behavior.idle, lock = behavior.lock, sleep = behavior.sleep },
+    idleTimeoutMin = math.floor(number(getConfig("idle_timeout_min"), 5, 1, 120)),
+    minAbsenceMin = math.floor(number(getConfig("min_absence_min"), 15, 1, 240)),
+    unresolvedAbsence = choice(getConfig("unresolved_absence"), { keep = true, remove = true }, "keep"),
+    idleBackend = choice(getConfig("idle_backend"), IDLE_BACKENDS, "auto"),
+    window = {
+      start = type(startText) == "string" and startText or "08:00",
+      ["end"] = type(endText) == "string" and endText or "19:00",
+      excludeHolidays = getConfig("window_exclude_holidays") ~= false,
+      extraRules = strings(getConfig("extra_rules")),
+    },
   }
+end
+
+-- Whether automation needs signals at all: the manual preset ignores them.
+function Model.usesSignals(settings: Settings): boolean
+  local actions = settings.actions
+  return settings.autoCheckin ~= "off"
+    or settings.autoCheckout ~= "off"
+    or actions.idle ~= "ignore"
+    or actions.lock ~= "ignore"
+    or actions.sleep ~= "ignore"
 end
 
 -- Targets --------------------------------------------------------------------
@@ -155,14 +223,98 @@ function Model.hasSession(day: Day, id: string): boolean
   return false
 end
 
-function Model.closedWorkedMs(day: Day?): number
+-- Days written before absences existed have none.
+local NO_ABSENCES: { Absence } = {}
+
+-- Worked time of the recorded sessions of a day, minus removed absences (spec §6.5).
+-- With `openStartS`, absences of the open session (from that instant) are left out: the
+-- UIs subtract them from the running time instead (`removedInOpenMs`).
+function Model.closedWorkedMs(day: Day?, openStartS: number?): number
   local total = 0
   if day then
     for _, session in day.sessions do
       total += (session.endS - session.startS) * 1000
     end
+    for _, absence in day.absences or NO_ABSENCES do
+      if absence.status == "removed" and not (openStartS and absence.startS >= openStartS) then
+        total -= (absence.endS - absence.startS) * 1000
+      end
+    end
   end
   return total
+end
+
+-- Removed absences of the open session, which started at `openStartS`.
+function Model.removedInOpenMs(day: Day?, openStartS: number): number
+  local total = 0
+  for _, absence in day and day.absences or NO_ABSENCES do
+    if absence.status == "removed" and absence.startS >= openStartS then
+      total += (absence.endS - absence.startS) * 1000
+    end
+  end
+  return total
+end
+
+function Model.addAbsence(day: Day, absence: Absence)
+  day.absences = day.absences or {}
+  local index = #day.absences + 1
+  for i, other in day.absences do
+    if absence.startS < other.startS then
+      index = i
+      break
+    end
+  end
+  table.insert(day.absences, index, absence)
+end
+
+function Model.removeAbsence(day: Day, id: string): boolean
+  for i, absence in day.absences or NO_ABSENCES do
+    if absence.id == id then
+      table.remove(day.absences, i)
+      return true
+    end
+  end
+  return false
+end
+
+-- Absences ---------------------------------------------------------------------
+
+-- Precedence of the signals of a merged absence (spec §6.3.5): sleep/gap > lock > idle.
+local SIGNAL_RANK = { idle = 1, lock = 2, sleep = 3, gap = 3 }
+
+function Model.strongestSignal(signals: { AwaySignal }): AwaySignal
+  local best: AwaySignal = signals[1]
+  for _, signal in signals do
+    if SIGNAL_RANK[signal] > SIGNAL_RANK[best] then
+      best = signal
+    end
+  end
+  return best
+end
+
+-- The action configured for the strongest signal; offline gaps follow `sleep`.
+function Model.absenceAction(settings: Settings, signals: { AwaySignal }): AbsenceAction
+  local signal = Model.strongestSignal(signals)
+  if signal == "gap" then
+    signal = "sleep"
+  end
+  return settings.actions[signal]
+end
+
+function Model.absenceId(startS: number): string
+  return "a_" .. base36(startS)
+end
+
+-- Tracking status (spec §6.1): away while an absence that is not ignored is in progress.
+function Model.status(state: State, settings: Settings): Status
+  if not state.open then
+    return "off"
+  end
+  local absence = state.absence
+  if absence and Model.absenceAction(settings, absence.signals) ~= "ignore" then
+    return "away"
+  end
+  return "working"
 end
 
 -- Undo -----------------------------------------------------------------------
@@ -189,6 +341,7 @@ export type SnapshotContext = {
   settings: Settings,
   meta: { trackingStart: string? },
   dayOf: (dateKey: string) -> Day?, -- recorded day, nil when nothing was recorded
+  automation: Types.SnapshotAutomation,
 }
 
 function Model.snapshot(ctx: SnapshotContext): Snapshot
@@ -196,20 +349,26 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
   local today = Time.workdayOf(ctx.nowS, settings.dayStartHour)
   local todayRecord = ctx.dayOf(today)
 
+  local status = Model.status(ctx.state, settings)
   local since
-  if open then
+  if status == "away" then
+    since = (ctx.state.absence :: any).startS
+  elseif open then
     since = open.startS
   elseif todayRecord and #todayRecord.sessions > 0 then
     since = todayRecord.sessions[#todayRecord.sessions].endS
   end
 
+  -- The open session counts toward the workday it started on; the rollover closes it
+  -- when that workday ends, so this only fails between a day change and the next tick.
   local openToday = open and Time.workdayOf(open.startS, settings.dayStartHour) == today
+  local openStartS = openToday and open.startS or nil
 
   local weekStart = Time.weekStart(today)
   local weekWorked, weekTarget = 0, 0
   for offset = 0, 6 do
     local key = Time.addDays(weekStart, offset)
-    weekWorked += Model.closedWorkedMs(ctx.dayOf(key))
+    weekWorked += Model.closedWorkedMs(ctx.dayOf(key), key == today and openStartS or nil)
     weekTarget += Model.targetMs(key, settings, meta)
   end
 
@@ -218,23 +377,48 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
     table.insert(sessions, { startS = session.startS, endS = session.endS })
   end
 
+  local absences = {}
+  for _, absence in todayRecord and todayRecord.absences or {} do
+    table.insert(absences, { startS = absence.startS, endS = absence.endS, status = absence.status })
+  end
+  local pending = {}
+  for _, absence in ctx.state.pending or ({} :: { Types.PendingAbsence }) do
+    table.insert(pending, {
+      id = absence.id,
+      startS = absence.startS,
+      endS = absence.endS,
+      signal = Model.strongestSignal(absence.signals),
+    })
+    if absence.date == today then
+      table.insert(absences, { startS = absence.startS, endS = absence.endS, status = "pending" })
+    end
+  end
+  table.sort(absences, function(a, b)
+    return a.startS < b.startS
+  end)
+
   local undo = Model.undoable(ctx.state, ctx.nowS)
+  local suggestion = ctx.state.suggestion
 
   return {
     v = Model.SNAPSHOT_VERSION,
-    status = open and "working" or "off",
+    status = status,
     since = since,
     today = {
       date = today,
-      workedClosedMs = Model.closedWorkedMs(todayRecord),
-      openStartMs = openToday and open.startS * 1000 or nil,
-      removedInOpenMs = 0,
+      workedClosedMs = Model.closedWorkedMs(todayRecord, openStartS),
+      openStartMs = openStartS and openStartS * 1000 or nil,
+      removedInOpenMs = openStartS and Model.removedInOpenMs(todayRecord, openStartS) or 0,
       targetMs = Model.targetMs(today, settings, meta),
       isWorkday = settings.workdays[Time.weekday(today)] == true,
       sessions = sessions,
+      absences = absences,
     },
     week = { workedMs = weekWorked, targetMs = weekTarget },
+    pending = pending,
+    suggestion = suggestion and suggestion.kind or nil,
     undo = undo and { id = undo.id, action = undo.action, atS = undo.atS } or nil,
+    automation = ctx.automation,
     contract = {
       weeklyHours = settings.weeklyHours,
       workdays = settings.workdays,

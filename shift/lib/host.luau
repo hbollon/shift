@@ -30,9 +30,14 @@ function Host.new(): Types.Host
     openSettings = noctalia.openSettings,
     setUpdateInterval = noctalia.setUpdateInterval,
     togglePanel = noctalia.togglePanel,
+    runStream = noctalia.runStream,
+    runAsync = noctalia.runAsync,
+    commandExists = noctalia.commandExists,
+    getenv = noctalia.getenv,
     log = noctalia.log,
     notifyError = noctalia.notifyError,
     tr = noctalia.tr,
+    trp = noctalia.trp,
   }
 end
 

@@ -21,6 +21,8 @@ function FakeHost.new(options)
   local dataDir = options.dataDir or "/data"
   local timeFormat = options.timeFormat or "{:%H:%M}"
   local palette = options.palette or {}
+  local commands = options.commands or {}
+  local env = options.env or {}
 
   local host = {
     logs = {},
@@ -179,6 +181,45 @@ function FakeHost.new(options)
     return palette[role] or "#" .. string.format("%06x", #role * 0x10101)
   end
 
+  -- Processes: streams and commands are recorded; tests feed lines and results --
+
+  -- Each started stream: { cmd, onLine }. `host.streamLine(i, line)` delivers a line.
+  host.streams = {}
+  -- Each runAsync call: { argv, onResult, timeoutMs }. `host.finish(i, result)` answers it.
+  host.commands = {}
+
+  function host.runStream(cmd, onLine)
+    table.insert(host.streams, { cmd = cmd, onLine = onLine })
+    return options.streamsFail ~= true
+  end
+
+  function host.streamLine(index, line)
+    host.streams[index].onLine(line)
+  end
+
+  function host.runAsync(argv, onResult, timeoutMs)
+    table.insert(host.commands, { argv = argv, onResult = onResult, timeoutMs = timeoutMs })
+    return true
+  end
+
+  function host.finish(index, result)
+    local entry = host.commands[index]
+    entry.onResult({
+      exitCode = result.exitCode or 0,
+      stdout = result.stdout or "",
+      stderr = result.stderr or "",
+      timedOut = false,
+    })
+  end
+
+  function host.commandExists(name)
+    return commands[name] == true
+  end
+
+  function host.getenv(name)
+    return env[name]
+  end
+
   -- Logs, notifications, translations -------------------------------------------
 
   function host.log(message)
@@ -202,6 +243,13 @@ function FakeHost.new(options)
       end)
     end
     return text
+  end
+
+  -- Plurals: `<key>.one` or `<key>.other`, with `{count}`.
+  function host.trp(key, count, subst)
+    local values = table.clone(subst or {})
+    values.count = count
+    return host.tr(key .. (count == 1 and ".one" or ".other"), values)
   end
 
   -- Compile-time check (make analyze) that the fake keeps up with the real adapter.

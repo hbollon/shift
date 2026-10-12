@@ -11,4 +11,4 @@ description  = "Track your work hours: one-click check in/out, smart automation,
 deprecated   = false
 plugin_api   = 32
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
-dependencies = []
+dependencies = ["swayidle"]

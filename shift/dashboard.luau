@@ -1,7 +1,8 @@
 --!nonstrict
--- Shift dashboard panel (spec §7.4): header with undo, status, first-run card, hero ring
--- with the live counter and the check in/out button, stat tiles, and today's timeline.
--- It renders the core snapshot every second while open and sends actions as commands.
+-- Shift dashboard panel (spec §7.4): header with undo, status, attention cards, first-run
+-- card, hero ring with the live counter and the check in/out button, stat tiles, today's
+-- timeline, and the automation footer with its details. It renders the core snapshot
+-- every second while open and sends actions as commands.
 
 local Commands = require("./lib/commands.luau")
 local Format = require("./lib/format.luau")
@@ -19,17 +20,17 @@ local HERO_STROKE = 11
 local COUNTER_SIZE = 36
 local DETAIL_SIZE = 13
 local RADIUS = 12
--- Session list: fixed row height so the list can be sized explicitly; past MAX_ROWS it
--- scrolls, keeping room for the rest of the panel.
 local ROW_HEIGHT = 22
 local ROW_GAP = 6
-local MAX_ROWS = 5
-local SCROLL_PADDING = 8
+-- Attention cards shown at once; the rest are counted.
+local MAX_CARDS = 3
+local PREVIEW_LABEL = 32
 
 local host = Host.new()
 local snapshot: Snapshot? = host.state.get("shift.snapshot")
 local isOpen = false
 local commandError: string? = nil -- shown inline until the next action
+local detailsOpen = false -- the automation details replace the dashboard body
 
 local render -- forward declaration: commands re-render on failure
 
@@ -86,11 +87,20 @@ local function header(snap: Snapshot, nowS: number): UiNode
   })
 end
 
+local DOT_COLORS = { working = "primary", away = "secondary", off = "on_surface_variant" }
+
 -- Status chip, with the estimated end of the day on the right while working.
-local function statusChip(snap: Snapshot, live: Live): UiNode
-  local working = snap.status == "working"
+local function statusChip(snap: Snapshot, live: Live, nowS: number): UiNode
+  local status = snap.status
   local text
-  if working and snap.since then
+  if status == "away" and snap.since then
+    local minutes = (nowS - snap.since) // 60
+    if minutes < 60 then
+      text = host.trp("panel.status.away_for", minutes)
+    else
+      text = host.tr("panel.status.away_since", { time = clock(snap.since) })
+    end
+  elseif status == "working" and snap.since then
     text = host.tr("panel.status.working_since", { time = clock(snap.since) })
   elseif snap.since then
     text = host.tr("panel.status.off_since", { time = clock(snap.since) })
@@ -99,7 +109,7 @@ local function statusChip(snap: Snapshot, live: Live): UiNode
   end
   return ui.row({ align = "center", justify = "space_between" }, {
     ui.row({ align = "center", gap = 8, paddingH = 10, paddingV = 4, radius = 999, fill = "surface_variant" }, {
-      ui.box({ width = 8, height = 8, radius = 4, fill = working and "primary" or "on_surface_variant" }),
+      ui.box({ width = 8, height = 8, radius = 4, fill = DOT_COLORS[status] }),
       ui.label({ text = text, fontSize = 12 }),
     }),
     ui.label({
@@ -108,6 +118,90 @@ local function statusChip(snap: Snapshot, live: Live): UiNode
       color = "on_surface_variant",
     }),
   })
+end
+
+-- Attention cards (spec §7.4.2) -------------------------------------------------------
+
+-- "42 min" under an hour, else a duration in the user's format.
+local function shortDuration(ms: number, fmt: Types.DurationFormat): string
+  local minutes = ms // 60000
+  if minutes < 60 then
+    return host.trp("panel.attention.minutes", minutes)
+  end
+  return Format.duration(ms, fmt)
+end
+
+local function smallButton(text: string, variant: string, onClick: () -> ()): UiNode
+  return ui.button({ text = text, variant = variant, controlSize = "sm", onClick = onClick })
+end
+
+local function card(glyph: string, text: string, actions: { UiNode }): UiNode
+  local children = {
+    ui.row({ align = "center", gap = 10 }, {
+      ui.glyph({ name = glyph, color = "secondary" }),
+      ui.label({ text = text, flexGrow = 1, maxLines = 2, fontSize = 13 }),
+    }),
+  }
+  if #actions > 0 then
+    table.insert(children, ui.row({ gap = 8, justify = "end" }, actions))
+  end
+  return ui.column({ gap = 8, padding = 12, radius = RADIUS, fill = "surface_variant" }, children)
+end
+
+-- Cards in priority order: a suggestion, pending absences (most recent first), invalid
+-- settings, then one-time hints.
+local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
+  local fmt = snap.display.durationFormat
+  local cards = {}
+  local suggestion = snap.suggestion
+  if suggestion then
+    local checkin = suggestion == "checkin"
+    table.insert(cards, card(checkin and "clock-play" or "clock-pause", host.tr("panel.attention.suggest_" .. suggestion, { time = clock(nowS) }), {
+      smallButton(host.tr("panel.attention.not_now"), "ghost", function()
+        send({ type = "suggestion.dismiss", kind = suggestion })
+      end),
+      smallButton(host.tr(checkin and "panel.checkin" or "panel.checkout"), checkin and "primary" or "outline", function()
+        send({ type = checkin and "checkin" or "checkout" })
+      end),
+    }))
+  end
+  for index = #snap.pending, 1, -1 do
+    local absence = snap.pending[index]
+    local text = host.tr("panel.attention.away", {
+      from = clock(absence.startS),
+      to = clock(absence.endS),
+      duration = shortDuration((absence.endS - absence.startS) * 1000, fmt),
+    }) .. " · " .. host.tr("panel.attention.signal." .. absence.signal)
+    table.insert(cards, card("clock-exclamation", text, {
+      smallButton(host.tr("panel.attention.remove"), "ghost", function()
+        send({ type = "absence.resolve", id = absence.id, keep = false })
+      end),
+      smallButton(host.tr("panel.attention.keep"), "outline", function()
+        send({ type = "absence.resolve", id = absence.id, keep = true })
+      end),
+    }))
+  end
+  local errors = #snap.automation.ruleErrors
+  if errors > 0 then
+    table.insert(cards, card("alert-triangle", host.trp("panel.attention.rule_errors", errors), {
+      smallButton(host.tr("panel.attention.edit_settings"), "outline", function()
+        host.openSettings()
+      end),
+    }))
+  end
+  for _, hint in snap.automation.hints do
+    table.insert(cards, card("info-circle", host.tr("panel.attention." .. hint), {
+      smallButton(host.tr("panel.attention.dismiss"), "ghost", function()
+        send({ type = "hint.dismiss", id = hint })
+      end),
+    }))
+  end
+  if #cards > MAX_CARDS then
+    local more = #cards - MAX_CARDS
+    cards = { table.unpack(cards, 1, MAX_CARDS) }
+    table.insert(cards, ui.label({ text = host.trp("panel.attention.more", more), fontSize = 12, color = "on_surface_variant" }))
+  end
+  return cards
 end
 
 -- First-run card (spec §6.10) ------------------------------------------------------
@@ -195,7 +289,7 @@ local function heroDetails(live: Live, fmt: Types.DurationFormat): { UiNode }
 end
 
 local function hero(snap: Snapshot, live: Live): UiNode
-  local working = snap.status == "working"
+  local working = snap.status ~= "off"
   local fmt = snap.display.durationFormat
   -- Discreet seconds, written to match the duration format ("5:42:17", "5h 42m 17s").
   local counterParts = { ui.label({ text = Format.duration(live.workedMs, fmt), fontSize = COUNTER_SIZE, fontWeight = "bold" }) }
@@ -281,24 +375,64 @@ local function todaySessions(snap: Snapshot, nowS: number): { { startS: number, 
   return list
 end
 
--- Proportional bar from the first whole hour to the next one after now: sessions in
--- primary, gaps faint. Widths come from flexGrow, proportional to durations.
-local function timeline(sessions, nowS: number): UiNode
+-- A box without a fill is drawn black.
+local TRANSPARENT = "on_surface/0"
+
+-- Look of each kind of timeline segment (spec §7.4.5): removed absences are drawn as an
+-- outline, so the gap they leave in the session stays visible.
+local SEGMENT_STYLES = {
+  work = { fill = "primary" },
+  kept = { fill = "primary/0.4" },
+  pending = { fill = "secondary/0.6" },
+  removed = { fill = TRANSPARENT, border = "outline", borderWidth = 1 },
+  gap = { fill = "on_surface/0.08" },
+}
+
+-- Splits the day into segments: gaps, worked time, and the absences inside sessions.
+local function segmentsOf(sessions, absences, fromS: number, toS: number): { { kind: string, startS: number, endS: number } }
+  local segments = {}
+  local function push(kind: string, startS: number, endS: number)
+    if endS > startS then
+      table.insert(segments, { kind = kind, startS = startS, endS = endS })
+    end
+  end
+  local cursor = fromS
+  for _, session in sessions do
+    push("gap", cursor, session.startS)
+    local at = session.startS
+    for _, absence in absences do
+      local startS, endS = math.max(absence.startS, at), math.min(absence.endS, session.endS)
+      if endS > startS then
+        push("work", at, startS)
+        push(absence.status, startS, endS)
+        at = endS
+      end
+    end
+    push("work", at, session.endS)
+    cursor = math.max(cursor, session.endS)
+  end
+  push("gap", cursor, toS)
+  return segments
+end
+
+-- Proportional bar from the first whole hour to the next one after now. Widths come from
+-- flexGrow, proportional to durations.
+local function timeline(sessions, absences, nowS: number): UiNode
   local first = sessions[1].startS
   local fromS = first - (first % 3600)
   local last = math.max(nowS, sessions[#sessions].endS)
   local toS = last - (last % 3600) + 3600
   local segments = {}
-  local cursor = fromS
-  for _, session in sessions do
-    if session.startS > cursor then
-      table.insert(segments, ui.box({ flexGrow = session.startS - cursor, height = 10, radius = 3, fill = "on_surface/0.08" }))
-    end
-    table.insert(segments, ui.box({ flexGrow = math.max(session.endS - session.startS, 60), height = 10, radius = 3, fill = "primary" }))
-    cursor = session.endS
-  end
-  if toS > cursor then
-    table.insert(segments, ui.box({ flexGrow = toS - cursor, height = 10, radius = 3, fill = "on_surface/0.08" }))
+  for _, segment in segmentsOf(sessions, absences, fromS, toS) do
+    local style = SEGMENT_STYLES[segment.kind]
+    table.insert(segments, ui.box({
+      flexGrow = math.max(segment.endS - segment.startS, 60),
+      height = 10,
+      radius = 3,
+      fill = style.fill,
+      border = style.border,
+      borderWidth = style.borderWidth,
+    }))
   end
   return ui.column({ gap = 4 }, {
     ui.row({ gap = 2 }, segments),
@@ -309,7 +443,6 @@ local function timeline(sessions, nowS: number): UiNode
   })
 end
 
--- Title and timeline stay in place; only the list of sessions scrolls when long.
 local function today(snap: Snapshot, nowS: number): UiNode
   local fmt = snap.display.durationFormat
   local sessions = todaySessions(snap, nowS)
@@ -318,8 +451,8 @@ local function today(snap: Snapshot, nowS: number): UiNode
     table.insert(children, ui.label({ text = host.tr("panel.today.empty"), color = "on_surface_variant", fontSize = 12 }))
     return ui.column({ gap = 8 }, children)
   end
-  table.insert(children, timeline(sessions, nowS))
-  -- Most recent first, so the running session stays visible when the list scrolls.
+  table.insert(children, timeline(sessions, snap.today.absences, nowS))
+  -- Most recent first: the running session stays on top.
   local rows = {}
   for index = #sessions, 1, -1 do
     local session = sessions[index]
@@ -332,15 +465,137 @@ local function today(snap: Snapshot, nowS: number): UiNode
       ui.label({ text = Format.duration((session.endS - session.startS) * 1000, fmt), fontWeight = "bold" }),
     }))
   end
-  if #rows <= MAX_ROWS then
-    table.insert(children, ui.column({ gap = ROW_GAP }, rows))
-  else
-    -- Five full rows and half of the next, which tells there is more. ui.scroll ignores
-    -- `height` and pads its content: a fixed-height column holds it and it fills the column.
-    local height = MAX_ROWS * (ROW_HEIGHT + ROW_GAP) + ROW_HEIGHT / 2 + SCROLL_PADDING
-    table.insert(children, ui.column({ height = height }, { ui.scroll({ flexGrow = 1, gap = ROW_GAP }, rows) }))
-  end
+  table.insert(children, ui.column({ gap = ROW_GAP }, rows))
   return ui.column({ gap = 8 }, children)
+end
+
+-- Automation (spec §7.4.6) --------------------------------------------------------------
+
+local function automationSummary(snap: Snapshot): string
+  local automation = snap.automation
+  if automation.preset == "manual" then
+    return host.tr("panel.automation.manual_summary")
+  end
+  local parts = {
+    host.tr("panel.automation.preset." .. automation.preset),
+    host.tr("panel.automation.idle", { minutes = automation.idleMin }),
+  }
+  local window = automation.window
+  if window.start ~= window["end"] then
+    table.insert(parts, host.tr("panel.automation.window", {
+      days = Format.workdays(snap.contract.workdays, dayNames()),
+      from = window.start,
+      to = window["end"],
+    }))
+  else
+    table.insert(parts, host.tr("panel.automation.no_window"))
+  end
+  if window.extraRules > 0 then
+    table.insert(parts, host.trp("panel.automation.rules", window.extraRules))
+  end
+  return table.concat(parts, " · ")
+end
+
+local function footer(snap: Snapshot): UiNode
+  return ui.row({ align = "center", gap = 6 }, {
+    ui.label({ text = automationSummary(snap), flexGrow = 1, fontSize = 12, color = "on_surface_variant", maxLines = 1 }),
+    ui.button({
+      glyph = detailsOpen and "chevron-down" or "info-circle",
+      variant = "ghost",
+      controlSize = "sm",
+      tooltip = host.tr("panel.automation.details"),
+      onClick = function()
+        detailsOpen = not detailsOpen
+        render()
+      end,
+    }),
+  })
+end
+
+local function sectionTitle(text: string): UiNode
+  return ui.label({ text = text, fontWeight = "medium" })
+end
+
+local function backendRow(glyph: string, name: string, health: Types.BackendHealth): UiNode
+  local failing = health == "error" or health == "unavailable"
+  return ui.row({ align = "center", gap = 10, height = ROW_HEIGHT }, {
+    ui.glyph({ name = glyph, color = "on_surface_variant" }),
+    ui.label({ text = host.tr("panel.automation.backend." .. name), flexGrow = 1 }),
+    ui.label({ text = host.tr("panel.automation.health." .. health), color = failing and "error" or "on_surface_variant" }),
+  })
+end
+
+-- 7 × 24 strip of this week's window: one row per day, one cell per hour, filled by the
+-- share of the hour inside the window.
+local function previewStrip(snap: Snapshot): UiNode
+  local names = dayNames()
+  local rows = {}
+  for day, hours in snap.automation.preview do
+    local cells = {}
+    for hour = 1, 24 do
+      local quarters = tonumber(string.sub(hours, hour, hour)) or 0
+      local fill = quarters == 0 and "on_surface/0.08" or string.format("primary/%.2f", quarters / 4)
+      table.insert(cells, ui.box({ flexGrow = 1, height = 8, radius = 2, fill = fill }))
+    end
+    -- Labels take their text's width: a fixed-width column aligns the rows.
+    table.insert(rows, ui.row({ align = "center", gap = 6 }, {
+      ui.column({ width = PREVIEW_LABEL }, { ui.label({ text = names[day], fontSize = 11, color = "on_surface_variant" }) }),
+      ui.row({ flexGrow = 1, gap = 1 }, cells),
+    }))
+  end
+  local ticks = {}
+  for _, hour in { "0", "6", "12", "18", "24" } do
+    table.insert(ticks, ui.label({ text = hour, fontSize = 10, color = "on_surface_variant" }))
+  end
+  table.insert(rows, ui.row({ gap = 6 }, {
+    ui.column({ width = PREVIEW_LABEL }, {}),
+    ui.row({ flexGrow = 1, justify = "space_between" }, ticks),
+  }))
+  return ui.column({ gap = 3 }, rows)
+end
+
+local function errorLine(err: Types.RuleError): string
+  local setting
+  if err.setting == "extra_rules" then
+    setting = host.tr("panel.automation.error_rule", { index = err.index })
+  else
+    setting = host.tr("settings." .. err.setting .. ".label")
+  end
+  return host.tr("panel.automation.error_line", {
+    setting = setting,
+    text = err.text,
+    reason = host.tr("panel.automation.reason." .. err.reason),
+  })
+end
+
+local function automationDetails(snap: Snapshot): { UiNode }
+  local automation = snap.automation
+  local children = {
+    sectionTitle(host.tr("panel.automation.backends")),
+    ui.column({ gap = ROW_GAP }, {
+      backendRow("keyboard", "idle", automation.backends.idle),
+      backendRow("lock", "logind", automation.backends.logind),
+    }),
+    sectionTitle(host.tr("panel.automation.preview")),
+    previewStrip(snap),
+  }
+  if #automation.ruleErrors > 0 then
+    table.insert(children, sectionTitle(host.tr("panel.automation.errors")))
+    for _, err in automation.ruleErrors do
+      table.insert(children, ui.label({ text = errorLine(err), color = "error", fontSize = 12, maxLines = 3 }))
+    end
+  end
+  table.insert(children, ui.row({ justify = "start" }, {
+    ui.button({
+      text = host.tr("panel.attention.edit_settings"),
+      glyph = "settings",
+      variant = "outline",
+      onClick = function()
+        host.openSettings()
+      end,
+    }),
+  }))
+  return children
 end
 
 -- Panel ----------------------------------------------------------------------------------
@@ -358,19 +613,32 @@ function render()
   local nowS = nowMs // 1000
   local live = Model.live(snap, nowMs)
 
-  local children = { header(snap, nowS), statusChip(snap, live) }
+  local children = { header(snap, nowS), statusChip(snap, live, nowS) }
   if commandError then
     table.insert(children, ui.label({ text = commandError, color = "error", fontSize = 12 }))
   end
-  if snap.flags.firstRun then
-    table.insert(children, welcomeCard(snap))
+
+  -- The body scrolls between the fixed status and footer.
+  local body
+  local cards = {}
+  if detailsOpen then
+    body = automationDetails(snap)
+  else
+    cards = attentionCards(snap, nowS)
+    body = table.clone(cards)
+    if snap.flags.firstRun then
+      table.insert(body, welcomeCard(snap))
+    end
+    table.insert(body, hero(snap, live))
+    if not snap.flags.firstRun then
+      table.insert(body, stats(snap, live))
+    end
+    table.insert(body, ui.separator({}))
+    table.insert(body, today(snap, nowS))
   end
-  table.insert(children, hero(snap, live))
-  if not snap.flags.firstRun then
-    table.insert(children, stats(snap, live))
-  end
+  table.insert(children, ui.scroll({ flexGrow = 1, gap = 12 }, body))
   table.insert(children, ui.separator({}))
-  table.insert(children, today(snap, nowS))
+  table.insert(children, footer(snap))
 
   -- The host does not re-flow siblings, nor resize a scroll, when the tree's structure
   -- changes in an open panel (a card removed, a session added). Keying the root by its
@@ -378,10 +646,16 @@ function render()
   local structure = table.concat({
     tostring(snap.flags.firstRun),
     tostring(commandError ~= nil),
+    tostring(detailsOpen),
+    tostring(#cards),
+    tostring(snap.suggestion),
+    tostring(#snap.pending),
+    tostring(#snap.automation.ruleErrors),
     tostring(#snap.today.sessions),
+    tostring(#snap.today.absences),
     tostring(snap.today.openStartMs ~= nil),
   }, "|")
-  panel.render(ui.column({ key = structure, gap = 12 }, children))
+  panel.render(ui.column({ key = structure, gap = 12, flexGrow = 1 }, children))
 end
 
 host.state.watch("shift.snapshot", function(value)
@@ -400,6 +674,7 @@ end
 function onClose()
   isOpen = false
   commandError = nil
+  detailsOpen = false
 end
 
 function update()

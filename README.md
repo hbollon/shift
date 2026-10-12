@@ -4,8 +4,9 @@
 your contract, smart and fully configurable automation (activity, session lock, sleep, schedule), and an overtime
 balance you can adjust when you take time off — all rendered with Noctalia's native controls and your theme.
 
-> **Status: early development.** Manual tracking works (bar widget, dashboard, control-center tile, IPC); automation,
-> history and the overtime balance are being built.
+> **Status: early development.** Tracking works from the bar widget, the dashboard, the control-center tile and IPC,
+> with automation (presets, work-hours window, idle, lock and sleep detection, absences to review); history and the
+> overtime balance are being built.
 > See the [specification](docs/specs/0001-shift-v1.md) for what v1 will do.
 
 ## Highlights (v1)

@@ -2,6 +2,7 @@
 local t = require("./lib/testing.luau")
 local Automation = require("../shift/lib/automation.luau")
 local Model = require("../shift/lib/model.luau")
+local Rules = require("../shift/lib/rules.luau")
 local Time = require("../shift/lib/time.luau")
 
 local SETTINGS = Model.readSettings(function() end)
@@ -174,6 +175,348 @@ t.describe("automation.onboarding", function()
     local again, againEffects = reduce(next, "onboarding.dismiss", NINE)
     t.expect(again).toBe(next)
     t.expect(#againEffects).toBe(0)
+  end)
+end)
+
+-- Scenarios -------------------------------------------------------------------------
+-- A scenario feeds events to the reducer with the window of its settings and keeps
+-- every effect. 2026-10-09 is a Friday; the default window is 08:00–19:00 on Mon–Fri.
+
+local FRI, SAT = "2026-10-09", "2026-10-10"
+
+local function at(day, hour, min, sec)
+  local year, month, d = Time.parseDate(day)
+  return Time.localToEpoch(year, month, d, hour, min or 0) + (sec or 0)
+end
+
+local function scenario(config, state)
+  local settings = Model.readSettings(function(key)
+    return (config or {})[key]
+  end)
+  local compiled = Rules.compile({
+    workdays = settings.workdays,
+    start = settings.window.start,
+    ["end"] = settings.window["end"],
+    excludeHolidays = settings.window.excludeHolidays,
+    extraRules = settings.window.extraRules,
+  })
+  local window = {
+    at = function(epochS)
+      return Rules.at(compiled, epochS, Rules.NO_CALENDAR)
+    end,
+    nextEdge = function(epochS)
+      return Rules.nextEdge(compiled, epochS, Rules.NO_CALENDAR)
+    end,
+  }
+  local sc = { state = state or { schema = 1 }, effects = {} }
+  function sc.send(event, nowS)
+    local next, effects, result = Automation.reduce(sc.state, event, { nowS = nowS, settings = settings, window = window })
+    sc.state = next
+    for _, effect in effects do
+      table.insert(sc.effects, effect)
+    end
+    return result
+  end
+  function sc.signal(signal, nowS)
+    return sc.send({ type = "signal", signal = signal, atS = nowS }, nowS)
+  end
+  -- Ticks every 5 s from `fromS` to `toS` included.
+  function sc.ticks(fromS, toS)
+    for nowS = fromS, toS, 5 do
+      sc.send({ type = "tick" }, nowS)
+    end
+  end
+  function sc.of(effectType)
+    local list = {}
+    for _, effect in sc.effects do
+      if effect.type == effectType then
+        table.insert(list, effect)
+      end
+    end
+    return list
+  end
+  return sc
+end
+
+t.describe("automation.checkin", function()
+  t.it("suggests a check-in on activity inside the window (assisted)", function()
+    local sc = scenario()
+    sc.send({ type = "start" }, at(FRI, 7, 30))
+    t.expect(sc.state.suggestion).toBeNil() -- before the window
+    sc.signal("active", at(FRI, 8, 14))
+    t.expect(sc.state.suggestion).toEqual({ kind = "checkin", untilS = at(FRI, 19) })
+    t.expect(sc.state.open).toBeNil()
+  end)
+
+  t.it("holds a dismissed suggestion until the segment ends", function()
+    local sc = scenario({ extra_rules = { "- * 12:00-13:30" } })
+    sc.signal("active", at(FRI, 9))
+    sc.send({ type = "suggestion.dismiss", kind = "checkin" }, at(FRI, 9, 1))
+    t.expect(sc.state.suggestion).toBeNil()
+    sc.signal("active", at(FRI, 11))
+    t.expect(sc.state.suggestion).toBeNil()
+    sc.signal("active", at(FRI, 13, 40)) -- after lunch, a new segment
+    t.expect(sc.state.suggestion.kind).toBe("checkin")
+  end)
+
+  t.it("drops a check-in suggestion when the window closes", function()
+    local sc = scenario()
+    sc.signal("active", at(FRI, 18, 50))
+    sc.ticks(at(FRI, 18, 59, 55), at(FRI, 19, 0, 5))
+    t.expect(sc.state.suggestion).toBeNil()
+  end)
+
+  t.it("checks in at service start inside the window (automatic)", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 8, 30))
+    t.expect(sc.state.open).toEqual({ id = Model.sessionId(at(FRI, 8, 30)), startS = at(FRI, 8, 30), origin = "auto" })
+    t.expect(sc.state.undo[1].action).toBe("checkin")
+  end)
+
+  t.it("checks in when the window opens while the user is active", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 7, 50))
+    sc.ticks(at(FRI, 7, 59, 50), at(FRI, 8, 0, 5))
+    t.expect(sc.state.open.startS).toBe(at(FRI, 8))
+  end)
+
+  t.it("does not check in when the window opens while the user is away", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 7, 50))
+    sc.signal("lock", at(FRI, 7, 55))
+    sc.ticks(at(FRI, 7, 59, 50), at(FRI, 8, 0, 5))
+    t.expect(sc.state.open).toBeNil()
+    sc.signal("unlock", at(FRI, 8, 20))
+    t.expect(sc.state.open.startS).toBe(at(FRI, 8, 20))
+  end)
+
+  t.it("holds automatic check-in after a manual check-out inside a segment (E8)", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 8, 30))
+    sc.send({ type = "checkout" }, at(FRI, 12))
+    t.expect(sc.state.overrides.suppressCheckinUntilS).toBe(at(FRI, 19))
+    sc.signal("active", at(FRI, 15))
+    t.expect(sc.state.open).toBeNil()
+  end)
+end)
+
+t.describe("automation.checkout", function()
+  t.it("checks out at the window end (automatic)", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 8, 30))
+    sc.ticks(at(FRI, 18, 59, 55), at(FRI, 19, 0, 5))
+    t.expect(sc.state.open).toBeNil()
+    local added = sc.of("ledger.addSession")
+    t.expect(added[1].session.endS).toBe(at(FRI, 19))
+    t.expect(sc.state.overrides.suppressCheckinUntilS).toBeNil()
+  end)
+
+  t.it("suggests a check-out at the window end (assisted)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.ticks(at(FRI, 18, 59, 55), at(FRI, 19, 0, 5))
+    t.expect(sc.state.open).toBeTruthy()
+    t.expect(sc.state.suggestion).toEqual({ kind = "checkout", untilS = at("2026-10-12", 8) })
+    sc.send({ type = "checkout" }, at(FRI, 19, 5))
+    t.expect(sc.state.suggestion).toBeNil()
+  end)
+
+  t.it("never closes a session started manually outside the window (E9)", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "checkin" }, at(SAT, 10))
+    t.expect(sc.state.overrides.manualSession).toBe(true)
+    local early = scenario({ automation = "automatic" })
+    early.send({ type = "checkin" }, at(FRI, 7))
+    early.ticks(at(FRI, 18, 59, 55), at(FRI, 19, 0, 5))
+    t.expect(early.state.open.startS).toBe(at(FRI, 7))
+    t.expect(early.state.suggestion).toBeNil()
+  end)
+end)
+
+t.describe("automation.absences", function()
+  t.it("records a long absence as pending, resolvable and undoable", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 10, 12))
+    t.expect(Model.status(sc.state, Model.readSettings(function() end))).toBe("away")
+    sc.signal("unlock", at(FRI, 10, 54))
+    local id = Model.absenceId(at(FRI, 10, 12))
+    t.expect(sc.state.pending).toEqual({
+      { id = id, date = FRI, startS = at(FRI, 10, 12), endS = at(FRI, 10, 54), signals = { "lock" } },
+    })
+    t.expect(sc.state.absence).toBeNil()
+
+    sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 11))
+    t.expect(sc.state.pending).toBeNil()
+    local added = sc.of("ledger.addAbsence")[1]
+    t.expect(added.date).toBe(FRI)
+    t.expect(added.absence.status).toBe("removed")
+    t.expect(added.absence.resolvedBy).toBe("user")
+    -- Delivered twice: nothing more happens.
+    local again = sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 11))
+    t.expect(again.changed).toBe(false)
+
+    sc.send({ type = "undo", id = "resolve:" .. id }, at(FRI, 11, 1))
+    t.expect(sc.of("ledger.removeAbsence")[1].id).toBe(id)
+    t.expect(sc.state.pending[1].id).toBe(id)
+  end)
+
+  t.it("counts short absences as work (E11)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("idle", at(FRI, 10, 10)) -- inactive since 10:05
+    sc.signal("active", at(FRI, 10, 19))
+    t.expect(sc.state.pending).toBeNil()
+    t.expect(#sc.of("ledger.addAbsence")).toBe(0)
+  end)
+
+  t.it("dates idle absences back by the idle timeout", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.ticks(at(FRI, 10, 4), at(FRI, 10, 4))
+    t.expect(sc.state.lastActivityS).toBe(at(FRI, 10, 4))
+    sc.signal("idle", at(FRI, 10, 5))
+    t.expect(sc.state.absence).toEqual({ startS = at(FRI, 10), signals = { "idle" } })
+    t.expect(sc.state.lastActivityS).toBe(at(FRI, 10))
+  end)
+
+  t.it("merges idle, lock and sleep and follows the strongest (E10)", function()
+    local sc = scenario({ automation = "custom", idle_action = "ignore", lock_action = "ask", sleep_action = "deduct" })
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("idle", at(FRI, 12, 5))
+    sc.signal("lock", at(FRI, 12, 10))
+    sc.signal("sleep", at(FRI, 12, 20))
+    sc.signal("resume", at(FRI, 13, 30))
+    t.expect(sc.state.absence).toBeTruthy() -- still locked
+    sc.signal("active", at(FRI, 13, 31)) -- on the lock screen: not activity
+    t.expect(sc.state.absence).toBeTruthy()
+    sc.signal("unlock", at(FRI, 13, 32))
+    local removed = sc.of("ledger.addAbsence")[1].absence
+    t.expect(removed.startS).toBe(at(FRI, 12))
+    t.expect(removed.endS).toBe(at(FRI, 13, 32))
+    t.expect(removed.signals).toEqual({ "idle", "lock", "sleep" })
+    t.expect(removed.status).toBe("removed")
+    t.expect(removed.resolvedBy).toBe("auto")
+    t.expect(sc.state.open).toBeTruthy()
+    t.expect(sc.state.undo[#sc.state.undo].action).toBe("resolve")
+  end)
+
+  t.it("ignores absences when the action is ignore", function()
+    local sc = scenario({ automation = "manual" })
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 10))
+    t.expect(Model.status(sc.state, Model.readSettings(function(key)
+      return key == "automation" and "manual" or nil
+    end))).toBe("working")
+    sc.signal("unlock", at(FRI, 12))
+    t.expect(sc.state.pending).toBeNil()
+  end)
+
+  t.it("checks out at the absence start once the threshold is crossed", function()
+    local sc = scenario({ automation = "custom", auto_checkin = "auto", idle_action = "checkout" })
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("idle", at(FRI, 10, 5)) -- since 10:00
+    sc.ticks(at(FRI, 10, 14, 55), at(FRI, 10, 15, 0))
+    t.expect(sc.state.open).toBeNil()
+    t.expect(sc.of("ledger.addSession")[1].session.endS).toBe(at(FRI, 10))
+    sc.signal("active", at(FRI, 10, 40))
+    t.expect(sc.state.open.startS).toBe(at(FRI, 10, 40)) -- back: automatic check-in
+  end)
+
+  t.it("closes the absence at check-out when checking out while away", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 17))
+    sc.send({ type = "checkout" }, at(FRI, 17, 30))
+    t.expect(sc.state.pending[1].endS).toBe(at(FRI, 17, 30))
+    t.expect(sc.of("ledger.addSession")[1].session.endS).toBe(at(FRI, 17, 30))
+  end)
+
+  t.it("trims a pending absence to the session end", function()
+    local sc = scenario({ automation = "automatic" })
+    sc.send({ type = "start" }, at(FRI, 8, 30))
+    sc.signal("lock", at(FRI, 18, 30))
+    sc.ticks(at(FRI, 18, 59, 55), at(FRI, 19, 0, 5))
+    t.expect(sc.state.open).toBeNil()
+    t.expect(sc.state.pending[1].startS).toBe(at(FRI, 18, 30))
+    t.expect(sc.state.pending[1].endS).toBe(at(FRI, 19))
+  end)
+
+  t.it("records the time the service was not running (E1)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.send({ type = "start", startS = at(FRI, 10) }, at(FRI, 10, 45))
+    t.expect(sc.state.pending[1].signals).toEqual({ "gap" })
+    t.expect(sc.state.pending[1].startS).toBe(at(FRI, 10))
+    t.expect(sc.state.pending[1].endS).toBe(at(FRI, 10, 45))
+  end)
+
+  t.it("merges a clock gap into the sleep it belongs to", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("sleep", at(FRI, 12))
+    sc.send({ type = "signal", signal = "gap", startS = at(FRI, 11, 59, 58), endS = at(FRI, 13) }, at(FRI, 13))
+    t.expect(sc.state.absence).toEqual({ startS = at(FRI, 11, 59, 58), signals = { "sleep", "gap" } })
+    sc.signal("resume", at(FRI, 13))
+    t.expect(#sc.state.pending).toBe(1)
+  end)
+
+  t.it("forgets signals when their sources restart", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 10))
+    sc.send({ type = "config", restarted = true }, at(FRI, 10, 30))
+    t.expect(sc.state.presence).toEqual({})
+    t.expect(sc.state.pending[1].endS).toBe(at(FRI, 10, 30))
+  end)
+end)
+
+t.describe("automation.rollover", function()
+  t.it("closes a forgotten session at the last activity (E4)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 21))
+    sc.ticks(at(SAT, 3, 59, 50), at(SAT, 3, 59, 55))
+    sc.send({ type = "tick" }, at(SAT, 4, 0, 1))
+    t.expect(sc.state.open).toBeNil()
+    t.expect(sc.state.workday).toBe(SAT)
+    t.expect(sc.of("ledger.addSession")[1].session.endS).toBe(at(SAT, 3, 59, 55))
+    t.expect(sc.of("ledger.setFlag")[1]).toEqual({ type = "ledger.setFlag", date = FRI, flag = "needsReview", value = true })
+    t.expect(sc.state.undo).toBeNil()
+  end)
+
+  t.it("closes the session before an overnight sleep (E2)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 21))
+    sc.ticks(at(FRI, 22, 59, 55), at(FRI, 23))
+    sc.signal("sleep", at(FRI, 23))
+    sc.signal("resume", at(SAT, 8))
+    t.expect(sc.state.open).toBeNil()
+    t.expect(sc.of("ledger.addSession")[1].session.endS).toBe(at(FRI, 23))
+    t.expect(sc.state.pending).toBeNil()
+  end)
+
+  t.it("resolves pending absences with unresolved_absence (E22)", function()
+    local sc = scenario({ unresolved_absence = "remove" })
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 10))
+    sc.signal("unlock", at(FRI, 11))
+    sc.signal("lock", at(FRI, 14))
+    sc.signal("unlock", at(FRI, 15))
+    sc.send({ type = "checkout" }, at(FRI, 17))
+    sc.send({ type = "tick" }, at(SAT, 9))
+    local absences = sc.of("ledger.addAbsence")
+    t.expect(#absences).toBe(2)
+    t.expect(absences[1].absence.status).toBe("removed")
+    t.expect(absences[2].absence.resolvedBy).toBe("auto")
+    t.expect(sc.state.pending).toBeNil()
+  end)
+
+  t.it("ignores a clock that went back to the previous day (E7)", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(SAT, 9))
+    sc.send({ type = "tick" }, at(FRI, 23))
+    t.expect(sc.state.workday).toBe(SAT)
+    t.expect(sc.state.open).toBeTruthy()
   end)
 end)
 

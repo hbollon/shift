@@ -1,6 +1,6 @@
 --!nonstrict
 -- Shift control-center tile (spec §7.5): a check in / check out shortcut showing the
--- status ("Working" / "Off"); today's time is in the bar. Right click opens the dashboard.
+-- status ("Working" / "Away" / "Off"); today's time is in the bar. Right click opens the dashboard.
 --
 -- Shortcut entries get no update() ticks: unacknowledged commands are retried when the
 -- next snapshot arrives, which the core publishes at least once a minute.
@@ -26,9 +26,8 @@ local function render()
     shortcut.setActive(false)
     return
   end
-  local working = snapshot.status == "working"
-  shortcut.setLabel(host.tr(working and "status.working" or "status.off"))
-  shortcut.setActive(working)
+  shortcut.setLabel(host.tr("status." .. snapshot.status))
+  shortcut.setActive(snapshot.status ~= "off")
 end
 
 host.state.watch("shift.snapshot", function(value)
@@ -41,7 +40,7 @@ render()
 
 -- Explicit check-in/check-out rather than toggle: a retried command stays harmless.
 function onClick()
-  local working = snapshot and snapshot.status == "working"
+  local working = snapshot and snapshot.status ~= "off"
   sender.send({ type = working and "checkout" or "checkin" })
 end
 

@@ -7,145 +7,613 @@
 -- `state` mirrors state.json and is never mutated. `effects` are applied by the service
 -- in order (ledger writes before the state, persistence before publishing, spec §10.3):
 --
---   { type = "ledger.addSession", date = "YYYY-MM-DD", session = { id, startS, endS, origin } }
---   { type = "ledger.removeSession", date = "YYYY-MM-DD", id = "s_…" }
---   { type = "state.save" }
---   { type = "publish" }
+--   { type = "ledger.addSession", date, session }      { type = "ledger.removeSession", date, id }
+--   { type = "ledger.addAbsence", date, absence }      { type = "ledger.removeAbsence", date, id }
+--   { type = "ledger.setFlag", date, flag, value }     { type = "state.save" }   { type = "publish" }
 --
 -- `result` is `{ ok = true, changed = bool }` or `{ ok = false, error = code }`. Commands
 -- are idempotent: a check-in while working is accepted and changes nothing, so a command
--- delivered twice is harmless (spec §9.3).
+-- delivered twice is harmless (spec §9.3). When nothing changes, the input state itself
+-- is returned.
 --
---   ctx = { nowS, settings }
+--   ctx = { nowS, settings, window = { at(t), nextEdge(t) } }
 --
--- Events so far: manual tracking (spec §6.2: checkin, checkout, toggle), undo (§6.8.4)
--- and the dismissal of the first-run card (§6.10).
+-- Events (the fields besides `type`):
+--   checkin, checkout, toggle  { origin? }        manual tracking (§6.2), origin "manual" by default
+--   undo                       { id? }            §6.8.4
+--   absence.resolve            { id, keep }       a pending absence counted as work or removed (§6.3.5)
+--   suggestion.dismiss         { kind }           "Not now" (§6.3.4)
+--   hint.dismiss               { id }             a one-time hint
+--   onboarding.dismiss                            the first-run card (§6.10)
+--   signal                     { signal, atS?, startS?, endS? }   idle, active, lock, unlock, sleep,
+--                                                 resume, or gap with its interval (§6.3.2)
+--   start                      { startS? }        service start; startS = stale heartbeat (E1)
+--   tick                                          every few seconds: window edges, thresholds
+--   config                     { restarted? }     settings changed; restarted: signal sources too
+--
+-- Before any event, a workday that has ended is rolled over (§6.4).
 
 local Model = require("./model.luau")
 local Time = require("./time.luau")
 local Types = require("./types.luau")
 
-type State = Types.State
-type Event = Types.Event
+type AwaySignal = Types.AwaySignal
 type Effect = Types.Effect
-type Result = Types.Result
+type Event = Types.Event
 type ReduceContext = Types.ReduceContext
+type Result = Types.Result
+type State = Types.State
 type UndoEntry = Types.UndoEntry
-type Handler = (state: State, event: Event, ctx: ReduceContext) -> (State, { Effect }, Result)
+type WindowProbe = Types.WindowProbe
+
+-- One reduction in progress. `state` is a shallow copy: nested tables are shared with
+-- the input and are replaced, never modified. `dirty` changes are saved and published;
+-- `touched` ones (the last activity on ticks) stay in memory until the next heartbeat.
+type Step = {
+  state: State,
+  effects: { Effect },
+  dirty: boolean,
+  touched: boolean,
+  now: number,
+  settings: Types.Settings,
+  window: WindowProbe,
+}
+
+type Handler = (s: Step, event: Event) -> Result?
 
 local Automation = {}
 
+local DAY_S = 24 * 60 * 60
 local UNCHANGED: Result = { ok = true, changed = false }
-local CHANGED: Result = { ok = true, changed = true }
 
--- Pushes an undo entry onto a state copy, keeping at most UNDO_DEPTH entries.
-local function pushUndo(state: State, entry: UndoEntry)
-  local stack = table.clone(state.undo or {})
+local NO_WINDOW: WindowProbe = {
+  at = function(_t)
+    return false
+  end,
+  nextEdge = function(_t)
+    return nil
+  end,
+}
+
+-- Helpers ------------------------------------------------------------------------
+
+local function emit(s: Step, effect: Effect)
+  table.insert(s.effects, effect)
+  s.dirty = true
+end
+
+local function isAway(presence: Types.Presence?): boolean
+  return presence ~= nil and (presence.idle == true or presence.locked == true or presence.asleep == true)
+end
+
+local function workdayOf(s: Step, epochS: number): string
+  return Time.workdayOf(epochS, s.settings.dayStartHour)
+end
+
+-- End of the window segment containing `atS`, or of a day when no edge is in sight.
+local function segmentEnd(s: Step, atS: number): number
+  return s.window.nextEdge(atS) or atS + DAY_S
+end
+
+local function setOverride(s: Step, key: string, value: any)
+  local overrides = table.clone(s.state.overrides or {})
+  overrides[key] = value
+  s.state.overrides = overrides
+  s.dirty = true
+end
+
+-- Keeps at most UNDO_DEPTH entries.
+local function pushUndo(s: Step, entry: UndoEntry)
+  local stack = table.clone(s.state.undo or {})
   table.insert(stack, entry)
   while #stack > Model.UNDO_DEPTH do
     table.remove(stack, 1)
   end
-  state.undo = stack
+  s.state.undo = stack
+  s.dirty = true
 end
 
-local function saveAndPublish(effects: { Effect }): { Effect }
-  table.insert(effects, { type = "state.save" })
-  table.insert(effects, { type = "publish" })
-  return effects
+local function insertPending(s: Step, absence: Types.PendingAbsence)
+  local pending = table.clone(s.state.pending or {})
+  local index = #pending + 1
+  for i, other in pending do
+    if absence.startS < other.startS then
+      index = i
+      break
+    end
+  end
+  table.insert(pending, index, absence)
+  s.state.pending = pending
+  s.dirty = true
 end
+
+-- Sessions -------------------------------------------------------------------------
+
+local function openSession(s: Step, atS: number, origin: Types.Origin)
+  local st = s.state
+  local open = { id = Model.sessionId(atS), startS = atS, origin = origin }
+  st.open = open
+  st.absence = nil
+  st.suggestion = nil
+  st.firstRunDismissed = true
+  st.lastActivityS = math.max(st.lastActivityS or atS, atS)
+  -- A manual session started outside the window is left alone by window edges (§6.3.4).
+  setOverride(s, "manualSession", (origin == "manual" and not s.window.at(atS)) or nil)
+  pushUndo(s, { id = "checkin:" .. open.id, action = "checkin", atS = s.now, session = open })
+end
+
+-- Closes the open session at `endS`. Pending absences past the end are trimmed: that
+-- time is no longer part of the session.
+local function closeSession(s: Step, endS: number, undoable: boolean)
+  local st = s.state
+  local open = assert(st.open, "no open session")
+  endS = math.max(endS, open.startS)
+  local session = { id = open.id, startS = open.startS, endS = endS, origin = open.origin }
+  local date = workdayOf(s, open.startS)
+  local recorded = endS > open.startS
+  if recorded then
+    emit(s, { type = "ledger.addSession", date = date, session = session })
+  end
+
+  if st.pending then
+    local pending = {}
+    for _, absence in st.pending do
+      if absence.startS < endS then
+        if absence.endS > endS then
+          absence = table.clone(absence)
+          absence.endS = endS
+        end
+        table.insert(pending, absence)
+      end
+    end
+    st.pending = if #pending > 0 then pending else nil
+  end
+
+  st.open = nil
+  st.absence = nil
+  st.suggestion = nil
+  setOverride(s, "manualSession", nil)
+  if undoable then
+    pushUndo(s, {
+      id = "checkout:" .. open.id,
+      action = "checkout",
+      atS = s.now,
+      session = session,
+      date = date,
+      recorded = recorded,
+    })
+  end
+  s.dirty = true
+end
+
+-- Absences (spec §6.3.5) ---------------------------------------------------------------
+
+-- Opens or extends the absence of the open session. The user was last active at `startS`.
+local function startAbsence(s: Step, signal: AwaySignal, startS: number)
+  local st = s.state
+  if st.lastActivityS and st.lastActivityS > startS then
+    st.lastActivityS = startS
+    s.touched = true
+  end
+  local open = st.open
+  if not open then
+    return
+  end
+  startS = math.max(startS, open.startS)
+  local absence = st.absence
+  local signals = table.clone(absence and absence.signals or {})
+  if not table.find(signals, signal) then
+    table.insert(signals, signal)
+  end
+  st.absence = { startS = absence and math.min(absence.startS, startS) or startS, signals = signals }
+  s.dirty = true
+end
+
+-- Ends the absence in progress at `endS` and applies its action.
+local function finishAbsence(s: Step, endS: number)
+  local st = s.state
+  local absence = st.absence
+  local open = st.open
+  st.absence = nil
+  s.dirty = true
+  if not absence or not open then
+    return
+  end
+  local settings = s.settings
+  local action = Model.absenceAction(settings, absence.signals)
+  if action == "ignore" or endS - absence.startS < settings.minAbsenceMin * 60 then
+    return -- micro-breaks are work
+  end
+  local id = Model.absenceId(absence.startS)
+  local date = workdayOf(s, open.startS)
+  if action == "ask" then
+    insertPending(s, { id = id, date = date, startS = absence.startS, endS = endS, signals = absence.signals })
+  elseif action == "deduct" then
+    local removed = {
+      id = id,
+      startS = absence.startS,
+      endS = endS,
+      signals = absence.signals,
+      status = "removed",
+      resolvedBy = "auto",
+    }
+    emit(s, { type = "ledger.addAbsence", date = date, absence = removed })
+    pushUndo(s, { id = "resolve:" .. id, action = "resolve", atS = s.now, absence = removed, date = date })
+  else -- checkout: normally done by the tick as soon as the threshold is crossed
+    closeSession(s, absence.startS, true)
+  end
+end
+
+-- Check-out at `endS` after ending an absence in progress (manual or window check-out).
+local function checkOut(s: Step, endS: number)
+  if s.state.absence then
+    finishAbsence(s, endS)
+  end
+  if s.state.open then
+    closeSession(s, endS, true)
+  end
+end
+
+-- Automatic check-in (spec §6.3.4) ------------------------------------------------------
+
+-- Checks in or suggests it when the user is active at `atS` inside the window.
+local function offerCheckin(s: Step, atS: number)
+  local st, mode = s.state, s.settings.autoCheckin
+  if st.open or mode == "off" or not s.window.at(atS) then
+    return
+  end
+  local suppressed = st.overrides and st.overrides.suppressCheckinUntilS
+  if suppressed and atS < suppressed then
+    return
+  end
+  if mode == "auto" then
+    openSession(s, atS, "auto")
+  elseif not (st.suggestion and st.suggestion.kind == "checkin") then
+    st.suggestion = { kind = "checkin", untilS = s.window.nextEdge(atS) }
+    s.dirty = true
+  end
+end
+
+-- The user is known to be active at `atS`: ends their absence and may check them in.
+local function activity(s: Step, atS: number)
+  local st = s.state
+  if not st.lastActivityS or atS > st.lastActivityS then
+    st.lastActivityS = atS
+    s.touched = true
+  end
+  if st.absence then
+    finishAbsence(s, atS)
+  end
+  offerCheckin(s, atS)
+end
+
+local function windowOpened(s: Step, edgeS: number)
+  local st = s.state
+  if st.suggestion and st.suggestion.kind == "checkout" then
+    st.suggestion = nil
+    s.dirty = true
+  end
+  if not isAway(st.presence) then
+    offerCheckin(s, edgeS)
+  end
+end
+
+local function windowClosed(s: Step, edgeS: number)
+  local st, mode = s.state, s.settings.autoCheckout
+  if st.suggestion and st.suggestion.kind == "checkin" then
+    st.suggestion = nil
+    s.dirty = true
+  end
+  if not st.open or mode == "off" or (st.overrides and st.overrides.manualSession) then
+    return
+  end
+  if mode == "auto" then
+    checkOut(s, edgeS)
+  else
+    st.suggestion = { kind = "checkout", untilS = s.window.nextEdge(edgeS) }
+    s.dirty = true
+  end
+end
+
+-- Rollover (spec §6.4) -------------------------------------------------------------------
+
+-- Closes the workday the service last saw when another one has started: the open
+-- session ends at the last known activity (the day is flagged for review, D21) and
+-- pending absences take `unresolved_absence`.
+local function rollover(s: Step)
+  local st = s.state
+  local today = workdayOf(s, s.now)
+  local last = st.workday
+  local open = st.open
+  if last == nil then
+    -- First run, or state written before rollovers existed.
+    last = open and workdayOf(s, open.startS) or today
+  end
+  if last >= today then
+    if st.workday ~= today and last == today then
+      st.workday = today
+      s.touched = true
+    end
+    return -- same day, or the clock went backwards (E7): keep the later day
+  end
+
+  if open then
+    local openDay = workdayOf(s, open.startS)
+    local dayEnd = Time.workdayStartS(Time.addDays(openDay, 1), s.settings.dayStartHour)
+    local closeAt = math.clamp(st.lastActivityS or dayEnd, open.startS, dayEnd)
+    if st.absence then
+      closeAt = math.min(closeAt, st.absence.startS)
+    end
+    closeSession(s, closeAt, false)
+    emit(s, { type = "ledger.setFlag", date = openDay, flag = "needsReview", value = true })
+  end
+
+  local status = s.settings.unresolvedAbsence == "remove" and "removed" or "kept"
+  for _, absence in st.pending or {} do
+    emit(s, {
+      type = "ledger.addAbsence",
+      date = absence.date,
+      absence = {
+        id = absence.id,
+        startS = absence.startS,
+        endS = absence.endS,
+        signals = absence.signals,
+        status = status,
+        resolvedBy = "auto",
+      },
+    })
+  end
+
+  st.pending = nil
+  st.absence = nil
+  st.suggestion = nil
+  st.window = nil
+  st.overrides = nil
+  st.undo = nil -- a new day starts with nothing to undo
+  st.workday = today
+  s.dirty = true
+end
+
+-- Handlers ---------------------------------------------------------------------------
 
 local handlers: { [string]: Handler } = {}
 
-function handlers.checkin(state, event, ctx)
-  if state.open then
-    return state, {}, UNCHANGED
+function handlers.checkin(s, event)
+  if s.state.open then
+    return UNCHANGED
   end
-  local next = table.clone(state)
-  local open = { id = Model.sessionId(ctx.nowS), startS = ctx.nowS, origin = event.origin or "manual" }
-  next.open = open
-  next.firstRunDismissed = true
-  pushUndo(next, { id = "checkin:" .. open.id, action = "checkin", atS = ctx.nowS, session = open })
-  return next, saveAndPublish({}), CHANGED
+  openSession(s, s.now, event.origin or "manual")
+  return nil
 end
 
-function handlers.checkout(state, _event, ctx)
-  local open = state.open
-  if not open then
-    return state, {}, UNCHANGED
+function handlers.checkout(s, event)
+  local st = s.state
+  if not st.open then
+    return UNCHANGED
   end
-  local effects: { Effect } = {}
-  local session = { id = open.id, startS = open.startS, endS = ctx.nowS, origin = open.origin }
-  local date = Time.workdayOf(open.startS, ctx.settings.dayStartHour)
-  -- A check-out in the same second as the check-in leaves nothing worth recording.
-  local recorded = ctx.nowS > open.startS
-  if recorded then
-    table.insert(effects, { type = "ledger.addSession", date = date, session = session })
+  checkOut(s, s.now)
+  -- A manual check-out inside a segment holds automatic check-in until it ends (E8).
+  if (event.origin or "manual") == "manual" and s.window.at(s.now) then
+    setOverride(s, "suppressCheckinUntilS", segmentEnd(s, s.now))
   end
-  local next = table.clone(state)
-  next.open = nil
-  pushUndo(next, {
-    id = "checkout:" .. open.id,
-    action = "checkout",
-    atS = ctx.nowS,
-    session = session,
-    date = date,
-    recorded = recorded,
-  })
-  return next, saveAndPublish(effects), CHANGED
+  return nil
 end
 
-function handlers.toggle(state, event, ctx)
-  if state.open then
-    return handlers.checkout(state, event, ctx)
+function handlers.toggle(s, event)
+  if s.state.open then
+    return handlers.checkout(s, event)
   end
-  return handlers.checkin(state, event, ctx)
+  return handlers.checkin(s, event)
 end
 
 -- Reverts the most recent action if it is younger than the undo window. `event.id`
 -- (sent by the UIs) must name that action: an undo delivered twice then finds another
 -- entry on top, or none, and does nothing. IPC sends no id and undoes the top entry.
-function handlers.undo(state, event, ctx)
-  local top = Model.undoable(state, ctx.nowS)
+function handlers.undo(s, event)
+  local st = s.state
+  local top = Model.undoable(st, s.now)
   if not top then
-    if event.id then
-      return state, {}, UNCHANGED
-    end
-    return state, {}, { ok = false, error = "nothing_to_undo" }
+    return event.id and UNCHANGED or { ok = false, error = "nothing_to_undo" }
   end
   if event.id and event.id ~= top.id then
-    return state, {}, UNCHANGED
+    return UNCHANGED
   end
 
-  local next = table.clone(state)
-  local stack = table.clone(state.undo :: { UndoEntry })
-  table.remove(stack)
-  next.undo = stack
-  local effects: { Effect } = {}
   if top.action == "checkin" then
     -- The stack is in action order, so the session it opened is still the open one.
-    if not (state.open and state.open.id == top.session.id) then
-      return state, {}, { ok = false, error = "undo_conflict" }
+    if not (st.open and st.open.id == top.session.id) then
+      return { ok = false, error = "undo_conflict" }
     end
-    next.open = nil
-  else
-    if state.open then
-      return state, {}, { ok = false, error = "undo_conflict" }
+    st.open = nil
+    st.absence = nil
+    setOverride(s, "manualSession", nil)
+  elseif top.action == "checkout" then
+    if st.open then
+      return { ok = false, error = "undo_conflict" }
     end
     if top.recorded then
-      table.insert(effects, { type = "ledger.removeSession", date = top.date, id = top.session.id })
+      emit(s, { type = "ledger.removeSession", date = top.date, id = top.session.id })
     end
-    next.open = { id = top.session.id, startS = top.session.startS, origin = top.session.origin }
+    st.open = { id = top.session.id, startS = top.session.startS, origin = top.session.origin }
+  else
+    local absence = top.absence
+    emit(s, { type = "ledger.removeAbsence", date = top.date, id = absence.id })
+    insertPending(s, {
+      id = absence.id,
+      date = top.date,
+      startS = absence.startS,
+      endS = absence.endS,
+      signals = absence.signals,
+    })
   end
-  return next, saveAndPublish(effects), CHANGED
+  local stack = table.clone(st.undo :: { UndoEntry })
+  table.remove(stack)
+  st.undo = stack
+  s.dirty = true
+  return nil
 end
 
-handlers["onboarding.dismiss"] = function(state, _event, _ctx)
-  if state.firstRunDismissed then
-    return state, {}, UNCHANGED
+handlers["absence.resolve"] = function(s, event)
+  local st = s.state
+  for index, pending in st.pending or {} do
+    if pending.id == event.id then
+      local list = table.clone(st.pending :: { Types.PendingAbsence })
+      table.remove(list, index)
+      st.pending = if #list > 0 then list else nil
+      local absence = {
+        id = pending.id,
+        startS = pending.startS,
+        endS = pending.endS,
+        signals = pending.signals,
+        status = event.keep == true and "kept" or "removed",
+        resolvedBy = "user",
+      }
+      emit(s, { type = "ledger.addAbsence", date = pending.date, absence = absence })
+      pushUndo(s, { id = "resolve:" .. pending.id, action = "resolve", atS = s.now, absence = absence, date = pending.date })
+      return nil
+    end
   end
-  local next = table.clone(state)
-  next.firstRunDismissed = true
-  return next, saveAndPublish({}), CHANGED
+  return UNCHANGED -- already resolved
+end
+
+-- "Not now": a check-in suggestion stays away until the segment ends.
+handlers["suggestion.dismiss"] = function(s, event)
+  local suggestion = s.state.suggestion
+  if not suggestion or (event.kind and event.kind ~= suggestion.kind) then
+    return UNCHANGED
+  end
+  if suggestion.kind == "checkin" then
+    setOverride(s, "suppressCheckinUntilS", suggestion.untilS or s.now + DAY_S)
+  end
+  s.state.suggestion = nil
+  s.dirty = true
+  return nil
+end
+
+handlers["hint.dismiss"] = function(s, event)
+  local hints = s.state.hints or {}
+  if type(event.id) ~= "string" or hints[event.id] then
+    return UNCHANGED
+  end
+  hints = table.clone(hints)
+  hints[event.id] = true
+  s.state.hints = hints
+  s.dirty = true
+  return nil
+end
+
+handlers["onboarding.dismiss"] = function(s, _event)
+  if s.state.firstRunDismissed then
+    return UNCHANGED
+  end
+  s.state.firstRunDismissed = true
+  s.dirty = true
+  return nil
+end
+
+local AWAY_SIGNALS = { idle = "idle", lock = "locked", sleep = "asleep" }
+local RETURN_SIGNALS = { active = "idle", unlock = "locked", resume = "asleep" }
+
+function handlers.signal(s, event)
+  local st, signal = s.state, event.signal
+  local atS = math.min(event.atS or s.now, s.now)
+  local presence = table.clone(st.presence or {})
+  if signal == "gap" then
+    if type(event.startS) ~= "number" or type(event.endS) ~= "number" or event.endS <= event.startS then
+      return { ok = false, error = "invalid_signal" }
+    end
+    startAbsence(s, "gap", event.startS)
+    atS = math.min(event.endS, s.now)
+  elseif AWAY_SIGNALS[signal] then
+    presence[AWAY_SIGNALS[signal]] = true
+    -- swayidle reports idle after the timeout: the user left that long ago.
+    local startS = signal == "idle" and atS - s.settings.idleTimeoutMin * 60 or atS
+    startAbsence(s, signal :: AwaySignal, startS)
+  elseif RETURN_SIGNALS[signal] then
+    presence[RETURN_SIGNALS[signal]] = false
+    if signal == "unlock" then
+      presence.idle = false -- unlocking takes input
+    end
+  else
+    return { ok = false, error = "invalid_signal" }
+  end
+  st.presence = presence
+  s.dirty = true
+  -- Activity ends an absence only once nothing reports the user away: `active` on the
+  -- lock screen is not activity, only `unlock` is (spike S1).
+  if not AWAY_SIGNALS[signal] and not isAway(presence) then
+    activity(s, atS)
+  end
+  return nil
+end
+
+-- Service start: the signals start over, and the start itself is activity. A stale
+-- heartbeat means the service was not running while a session was open (E1). The window
+-- state is kept, so an edge passed while stopped is applied by the next tick.
+function handlers.start(s, event)
+  local st = s.state
+  st.presence = {}
+  s.dirty = true
+  if type(event.startS) == "number" and event.startS < s.now then
+    startAbsence(s, "gap", event.startS)
+  end
+  activity(s, s.now)
+  return nil
+end
+
+function handlers.tick(s, _event)
+  local st, now, settings = s.state, s.now, s.settings
+  if st.open and not isAway(st.presence) then
+    st.lastActivityS = now
+    s.touched = true
+  end
+
+  local absence = st.absence
+  if
+    st.open
+    and absence
+    and Model.absenceAction(settings, absence.signals) == "checkout"
+    and now - absence.startS >= settings.minAbsenceMin * 60
+  then
+    closeSession(s, absence.startS, true)
+  end
+
+  local suggestion = st.suggestion
+  if suggestion and suggestion.untilS and now >= suggestion.untilS then
+    st.suggestion = nil
+    s.dirty = true
+  end
+
+  -- Window edges are computed ahead (`untilS`), so most ticks stop here (spec §9.4).
+  local window = st.window
+  if not window or now >= (window.untilS or math.huge) then
+    local inside = s.window.at(now)
+    st.window = { open = inside, untilS = s.window.nextEdge(now) or now + DAY_S }
+    s.touched = true
+    if window and inside ~= window.open then
+      local edgeS = math.min(window.untilS or now, now)
+      if inside then
+        windowOpened(s, edgeS)
+      else
+        windowClosed(s, edgeS)
+      end
+    end
+  end
+  return nil
+end
+
+-- New settings: the window is evaluated afresh, without treating the change as an edge,
+-- and suggestions made under the old settings are dropped. When the signal sources were
+-- restarted, what they said is forgotten; the user is changing settings, so active.
+function handlers.config(s, event)
+  s.state.window = nil
+  s.state.suggestion = nil
+  s.dirty = true
+  if event.restarted then
+    s.state.presence = {}
+    activity(s, s.now)
+  end
+  return nil
 end
 
 function Automation.reduce(state: State, event: Event, ctx: ReduceContext): (State, { Effect }, Result)
@@ -153,7 +621,25 @@ function Automation.reduce(state: State, event: Event, ctx: ReduceContext): (Sta
   if not handler then
     return state, {}, { ok = false, error = "unknown_command" }
   end
-  return handler(state, event, ctx)
+  local s: Step = {
+    state = table.clone(state),
+    effects = {},
+    dirty = false,
+    touched = false,
+    now = ctx.nowS,
+    settings = ctx.settings,
+    window = ctx.window or NO_WINDOW,
+  }
+  rollover(s)
+  local result = handler(s, event)
+  if not s.dirty and not s.touched then
+    return state, {}, result or UNCHANGED
+  end
+  if s.dirty then
+    table.insert(s.effects, { type = "state.save" })
+    table.insert(s.effects, { type = "publish" })
+  end
+  return s.state, s.effects, result or { ok = true, changed = s.dirty }
 end
 
 return Automation

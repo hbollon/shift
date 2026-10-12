@@ -71,6 +71,7 @@ shift/              the plugin, laid out exactly as in community-plugins
   dashboard.luau    [[panel]]   — dashboard panel
   tile.luau         [[shortcut]] — control-center tile
   lib/              shared modules (pure logic first)
+  lib/signals/      signal sources (swayidle, logind) and their stream wrapper
   lib/ui/           shared UI components (the only modules using `ui`)
   translations/en.json
 tests/              *.spec.luau unit tests, lib/testing.luau, lib/fake_host.luau, lib/json.luau
