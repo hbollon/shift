@@ -56,8 +56,8 @@ Automation acts only within your work hours (the window), on your workdays:
   automatic check-ins until the end of the current work-hours period; a session started outside your work hours is
   never closed by them.
 - **Absences**: when you come back after being inactive, with the screen locked or the computer asleep for at least
-  15 minutes, Shift asks whether that time was work (a meeting, a call) or should be removed. Shorter breaks count as
-  work.
+  15 minutes, Shift asks whether that time was work (a meeting, a call) or should be removed. Removing it splits
+  your session: checked out when you left, checked in when you came back. Shorter breaks count as work.
 - **End of day**: a session still open when the workday ends (at 04:00 by default) is closed at your last activity,
   and unreviewed absences count as work.
 

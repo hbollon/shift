@@ -8,7 +8,6 @@
 -- in order (ledger writes before the state, persistence before publishing, spec §10.3):
 --
 --   { type = "ledger.addSession", date, session }      { type = "ledger.removeSession", date, id }
---   { type = "ledger.addAbsence", date, absence }      { type = "ledger.removeAbsence", date, id }
 --   { type = "ledger.setFlag", date, flag, value }     { type = "state.save" }   { type = "publish" }
 --
 -- `result` is `{ ok = true, changed = bool }` or `{ ok = false, error = code }`. Commands
@@ -16,12 +15,14 @@
 -- delivered twice is harmless (spec §9.3). When nothing changes, the input state itself
 -- is returned.
 --
---   ctx = { nowS, settings, window = { at(t), nextEdge(t) } }
+--   ctx = { nowS, settings, window = { at(t), nextEdge(t) }, dayOf(date) }
+--
+-- `dayOf` reads recorded days, only to cut a removed absence out of a closed session.
 --
 -- Events (the fields besides `type`):
 --   checkin, checkout, toggle  { origin? }        manual tracking (§6.2), origin "manual" by default
 --   undo                       { id? }            §6.8.4
---   absence.resolve            { id, keep }       a pending absence counted as work or removed (§6.3.5)
+--   absence.resolve            { id, keep }       a pending absence counted as work or cut out (§6.3.5)
 --   suggestion.dismiss         { kind }           "Not now" (§6.3.4)
 --   hint.dismiss               { id }             a one-time hint
 --   onboarding.dismiss                            the first-run card (§6.10)
@@ -38,10 +39,13 @@ local Time = require("./time.luau")
 local Types = require("./types.luau")
 
 type AwaySignal = Types.AwaySignal
+type Cut = Types.Cut
 type Effect = Types.Effect
 type Event = Types.Event
+type PendingAbsence = Types.PendingAbsence
 type ReduceContext = Types.ReduceContext
 type Result = Types.Result
+type Session = Types.Session
 type State = Types.State
 type UndoEntry = Types.UndoEntry
 type WindowProbe = Types.WindowProbe
@@ -49,6 +53,8 @@ type WindowProbe = Types.WindowProbe
 -- One reduction in progress. `state` is a shallow copy: nested tables are shared with
 -- the input and are replaced, never modified. `dirty` changes are saved and published;
 -- `touched` ones (the last activity on ticks) stay in memory until the next heartbeat.
+-- `days` holds the sessions of the recorded days read so far, with this step's session
+-- effects applied.
 type Step = {
   state: State,
   effects: { Effect },
@@ -57,6 +63,8 @@ type Step = {
   now: number,
   settings: Types.Settings,
   window: WindowProbe,
+  dayOf: (dateKey: string) -> Types.Day?,
+  days: { [string]: { Session } },
 }
 
 type Handler = (s: Step, event: Event) -> Result?
@@ -113,7 +121,7 @@ local function pushUndo(s: Step, entry: UndoEntry)
   s.dirty = true
 end
 
-local function insertPending(s: Step, absence: Types.PendingAbsence)
+local function insertPending(s: Step, absence: PendingAbsence)
   local pending = table.clone(s.state.pending or {})
   local index = #pending + 1
   for i, other in pending do
@@ -128,6 +136,33 @@ local function insertPending(s: Step, absence: Types.PendingAbsence)
 end
 
 -- Sessions -------------------------------------------------------------------------
+
+-- Sessions of a recorded day as this step leaves them.
+local function sessionsOf(s: Step, date: string): { Session }
+  local list = s.days[date]
+  if not list then
+    local day = s.dayOf(date)
+    list = table.clone(day and day.sessions or {})
+    s.days[date] = list
+  end
+  return list
+end
+
+local function addSession(s: Step, date: string, session: Session)
+  table.insert(sessionsOf(s, date), session)
+  emit(s, { type = "ledger.addSession", date = date, session = session })
+end
+
+local function removeSession(s: Step, date: string, id: string)
+  local list = sessionsOf(s, date)
+  for index, session in list do
+    if session.id == id then
+      table.remove(list, index)
+      break
+    end
+  end
+  emit(s, { type = "ledger.removeSession", date = date, id = id })
+end
 
 local function openSession(s: Step, atS: number, origin: Types.Origin)
   local st = s.state
@@ -152,7 +187,7 @@ local function closeSession(s: Step, endS: number, undoable: boolean)
   local date = workdayOf(s, open.startS)
   local recorded = endS > open.startS
   if recorded then
-    emit(s, { type = "ledger.addSession", date = date, session = session })
+    addSession(s, date, session)
   end
 
   if st.pending then
@@ -209,6 +244,62 @@ local function startAbsence(s: Step, signal: AwaySignal, startS: number)
   s.dirty = true
 end
 
+-- Cuts [startS, endS] out of the session holding it (spec §6.3.5): the session ends at
+-- the absence start and goes on as a new session from its end. Returns how to undo it,
+-- or nil when no session holds that time any more (it was undone or edited).
+local function cutSession(s: Step, date: string, startS: number, endS: number): Cut?
+  local st = s.state
+  local open = st.open
+  if open and startS >= open.startS then
+    local openDate = workdayOf(s, open.startS)
+    local pieces = {}
+    if startS > open.startS then
+      addSession(s, openDate, { id = open.id, startS = open.startS, endS = startS, origin = open.origin })
+      table.insert(pieces, { date = openDate, id = open.id })
+    end
+    st.open = { id = Model.sessionId(endS), startS = endS, origin = open.origin }
+    s.dirty = true
+    return { session = open, date = openDate, pieces = pieces, openId = st.open.id }
+  end
+  for _, session in sessionsOf(s, date) do
+    if session.startS < endS and startS < session.endS then
+      local cutStart, cutEnd = math.max(startS, session.startS), math.min(endS, session.endS)
+      local pieces = {}
+      removeSession(s, date, session.id)
+      if cutStart > session.startS then
+        addSession(s, date, { id = session.id, startS = session.startS, endS = cutStart, origin = session.origin })
+        table.insert(pieces, { date = date, id = session.id })
+      end
+      if session.endS > cutEnd then
+        local id, pieceDate = Model.sessionId(cutEnd), workdayOf(s, cutEnd)
+        addSession(s, pieceDate, { id = id, startS = cutEnd, endS = session.endS, origin = session.origin })
+        table.insert(pieces, { date = pieceDate, id = id })
+      end
+      return { session = session, date = date, pieces = pieces }
+    end
+  end
+  return nil
+end
+
+-- Reverts a cut. Fails when the session that went on is no longer the open one.
+local function uncut(s: Step, cut: Cut): boolean
+  local st = s.state
+  if cut.openId and not (st.open and st.open.id == cut.openId) then
+    return false
+  end
+  for _, piece in cut.pieces do
+    removeSession(s, piece.date, piece.id)
+  end
+  if cut.openId then
+    local session = cut.session
+    st.open = { id = session.id, startS = session.startS, origin = session.origin }
+  else
+    addSession(s, cut.date, cut.session :: Session)
+  end
+  s.dirty = true
+  return true
+end
+
 -- Ends the absence in progress at `endS` and applies its action.
 local function finishAbsence(s: Step, endS: number)
   local st = s.state
@@ -229,16 +320,10 @@ local function finishAbsence(s: Step, endS: number)
   if action == "ask" then
     insertPending(s, { id = id, date = date, startS = absence.startS, endS = endS, signals = absence.signals })
   elseif action == "deduct" then
-    local removed = {
-      id = id,
-      startS = absence.startS,
-      endS = endS,
-      signals = absence.signals,
-      status = "removed",
-      resolvedBy = "auto",
-    }
-    emit(s, { type = "ledger.addAbsence", date = date, absence = removed })
-    pushUndo(s, { id = "resolve:" .. id, action = "resolve", atS = s.now, absence = removed, date = date })
+    -- Undone back to pending, like a decision of the user (§6.8.4).
+    local pending = { id = id, date = date, startS = absence.startS, endS = endS, signals = absence.signals }
+    local cut = cutSession(s, date, absence.startS, endS)
+    pushUndo(s, { id = "resolve:" .. id, action = "resolve", atS = s.now, absence = pending, cut = cut })
   else -- checkout: normally done by the tick as soon as the threshold is crossed
     closeSession(s, absence.startS, true)
   end
@@ -348,20 +433,11 @@ local function rollover(s: Step)
     emit(s, { type = "ledger.setFlag", date = openDay, flag = "needsReview", value = true })
   end
 
-  local status = s.settings.unresolvedAbsence == "remove" and "removed" or "kept"
-  for _, absence in st.pending or {} do
-    emit(s, {
-      type = "ledger.addAbsence",
-      date = absence.date,
-      absence = {
-        id = absence.id,
-        startS = absence.startS,
-        endS = absence.endS,
-        signals = absence.signals,
-        status = status,
-        resolvedBy = "auto",
-      },
-    })
+  -- Kept absences are already work; removed ones are cut out of their closed sessions.
+  if s.settings.unresolvedAbsence == "remove" then
+    for _, absence in st.pending or {} do
+      cutSession(s, absence.date, absence.startS, absence.endS)
+    end
   end
 
   st.pending = nil
@@ -432,19 +508,14 @@ function handlers.undo(s, event)
       return { ok = false, error = "undo_conflict" }
     end
     if top.recorded then
-      emit(s, { type = "ledger.removeSession", date = top.date, id = top.session.id })
+      removeSession(s, top.date, top.session.id)
     end
     st.open = { id = top.session.id, startS = top.session.startS, origin = top.session.origin }
   else
-    local absence = top.absence
-    emit(s, { type = "ledger.removeAbsence", date = top.date, id = absence.id })
-    insertPending(s, {
-      id = absence.id,
-      date = top.date,
-      startS = absence.startS,
-      endS = absence.endS,
-      signals = absence.signals,
-    })
+    if top.cut and not uncut(s, top.cut) then
+      return { ok = false, error = "undo_conflict" }
+    end
+    insertPending(s, top.absence)
   end
   local stack = table.clone(st.undo :: { UndoEntry })
   table.remove(stack)
@@ -457,19 +528,12 @@ handlers["absence.resolve"] = function(s, event)
   local st = s.state
   for index, pending in st.pending or {} do
     if pending.id == event.id then
-      local list = table.clone(st.pending :: { Types.PendingAbsence })
+      local list = table.clone(st.pending :: { PendingAbsence })
       table.remove(list, index)
       st.pending = if #list > 0 then list else nil
-      local absence = {
-        id = pending.id,
-        startS = pending.startS,
-        endS = pending.endS,
-        signals = pending.signals,
-        status = event.keep == true and "kept" or "removed",
-        resolvedBy = "user",
-      }
-      emit(s, { type = "ledger.addAbsence", date = pending.date, absence = absence })
-      pushUndo(s, { id = "resolve:" .. pending.id, action = "resolve", atS = s.now, absence = absence, date = pending.date })
+      -- Kept time is already part of its session.
+      local cut = if event.keep == true then nil else cutSession(s, pending.date, pending.startS, pending.endS)
+      pushUndo(s, { id = "resolve:" .. pending.id, action = "resolve", atS = s.now, absence = pending, cut = cut })
       return nil
     end
   end
@@ -629,6 +693,10 @@ function Automation.reduce(state: State, event: Event, ctx: ReduceContext): (Sta
     now = ctx.nowS,
     settings = ctx.settings,
     window = ctx.window or NO_WINDOW,
+    dayOf = ctx.dayOf or function(_dateKey)
+      return nil
+    end,
+    days = {},
   }
   rollover(s)
   local result = handler(s, event)

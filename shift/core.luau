@@ -107,6 +107,11 @@ local function automationInfo(now: number): Types.SnapshotAutomation
   }
 end
 
+-- Recorded day, nil when nothing was recorded.
+local function dayOf(dateKey: string): Types.Day?
+  return store:day(dateKey)
+end
+
 local function publish()
   local now = nowS()
   lastPublishMinute = now // 60
@@ -117,9 +122,7 @@ local function publish()
       nowS = now,
       settings = settings,
       meta = balance,
-      dayOf = function(dateKey)
-        return store:day(dateKey)
-      end,
+      dayOf = dayOf,
       automation = automationInfo(now),
     })
   )
@@ -154,14 +157,6 @@ local function apply(effects: { Types.Effect })
       editDay(effect.date, function(day)
         Model.removeSession(day, effect.id)
       end)
-    elseif effect.type == "ledger.addAbsence" then
-      editDay(effect.date, function(day)
-        Model.addAbsence(day, effect.absence)
-      end)
-    elseif effect.type == "ledger.removeAbsence" then
-      editDay(effect.date, function(day)
-        Model.removeAbsence(day, effect.id)
-      end)
     elseif effect.type == "ledger.setFlag" then
       editDay(effect.date, function(day)
         day.flags = day.flags or {}
@@ -177,7 +172,7 @@ end
 
 local function dispatch(event: Types.Event): Types.Result
   local nextState, effects, result =
-    Automation.reduce(state, event, { nowS = nowS(), settings = settings, window = windowProbe })
+    Automation.reduce(state, event, { nowS = nowS(), settings = settings, window = windowProbe, dayOf = dayOf })
   state = nextState
   apply(effects)
   return result

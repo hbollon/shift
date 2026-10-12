@@ -5,7 +5,6 @@
 local Time = require("./time.luau")
 local Types = require("./types.luau")
 
-type Absence = Types.Absence
 type AbsenceAction = Types.AbsenceAction
 type AwaySignal = Types.AwaySignal
 type Day = Types.Day
@@ -166,7 +165,7 @@ end
 -- Sessions -------------------------------------------------------------------
 
 function Model.newDay(): Day
-  return { sessions = {}, absences = {}, flags = {}, note = "" }
+  return { sessions = {}, flags = {}, note = "" }
 end
 
 local DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -223,58 +222,16 @@ function Model.hasSession(day: Day, id: string): boolean
   return false
 end
 
--- Days written before absences existed have none.
-local NO_ABSENCES: { Absence } = {}
-
--- Worked time of the recorded sessions of a day, minus removed absences (spec §6.5).
--- With `openStartS`, absences of the open session (from that instant) are left out: the
--- UIs subtract them from the running time instead (`removedInOpenMs`).
-function Model.closedWorkedMs(day: Day?, openStartS: number?): number
+-- Worked time of the recorded sessions of a day (spec §6.5). Removed absences are not
+-- part of any session.
+function Model.closedWorkedMs(day: Day?): number
   local total = 0
   if day then
     for _, session in day.sessions do
       total += (session.endS - session.startS) * 1000
     end
-    for _, absence in day.absences or NO_ABSENCES do
-      if absence.status == "removed" and not (openStartS and absence.startS >= openStartS) then
-        total -= (absence.endS - absence.startS) * 1000
-      end
-    end
   end
   return total
-end
-
--- Removed absences of the open session, which started at `openStartS`.
-function Model.removedInOpenMs(day: Day?, openStartS: number): number
-  local total = 0
-  for _, absence in day and day.absences or NO_ABSENCES do
-    if absence.status == "removed" and absence.startS >= openStartS then
-      total += (absence.endS - absence.startS) * 1000
-    end
-  end
-  return total
-end
-
-function Model.addAbsence(day: Day, absence: Absence)
-  day.absences = day.absences or {}
-  local index = #day.absences + 1
-  for i, other in day.absences do
-    if absence.startS < other.startS then
-      index = i
-      break
-    end
-  end
-  table.insert(day.absences, index, absence)
-end
-
-function Model.removeAbsence(day: Day, id: string): boolean
-  for i, absence in day.absences or NO_ABSENCES do
-    if absence.id == id then
-      table.remove(day.absences, i)
-      return true
-    end
-  end
-  return false
 end
 
 -- Absences ---------------------------------------------------------------------
@@ -368,7 +325,7 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
   local weekWorked, weekTarget = 0, 0
   for offset = 0, 6 do
     local key = Time.addDays(weekStart, offset)
-    weekWorked += Model.closedWorkedMs(ctx.dayOf(key), key == today and openStartS or nil)
+    weekWorked += Model.closedWorkedMs(ctx.dayOf(key))
     weekTarget += Model.targetMs(key, settings, meta)
   end
 
@@ -377,11 +334,7 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
     table.insert(sessions, { startS = session.startS, endS = session.endS })
   end
 
-  local absences = {}
-  for _, absence in todayRecord and todayRecord.absences or {} do
-    table.insert(absences, { startS = absence.startS, endS = absence.endS, status = absence.status })
-  end
-  local pending = {}
+  local absences, pending = {}, {}
   for _, absence in ctx.state.pending or ({} :: { Types.PendingAbsence }) do
     table.insert(pending, {
       id = absence.id,
@@ -390,12 +343,9 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
       signal = Model.strongestSignal(absence.signals),
     })
     if absence.date == today then
-      table.insert(absences, { startS = absence.startS, endS = absence.endS, status = "pending" })
+      table.insert(absences, { startS = absence.startS, endS = absence.endS })
     end
   end
-  table.sort(absences, function(a, b)
-    return a.startS < b.startS
-  end)
 
   local undo = Model.undoable(ctx.state, ctx.nowS)
   local suggestion = ctx.state.suggestion
@@ -406,9 +356,8 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
     since = since,
     today = {
       date = today,
-      workedClosedMs = Model.closedWorkedMs(todayRecord, openStartS),
+      workedClosedMs = Model.closedWorkedMs(todayRecord),
       openStartMs = openStartS and openStartS * 1000 or nil,
-      removedInOpenMs = openStartS and Model.removedInOpenMs(todayRecord, openStartS) or 0,
       targetMs = Model.targetMs(today, settings, meta),
       isWorkday = settings.workdays[Time.weekday(today)] == true,
       sessions = sessions,
@@ -434,7 +383,7 @@ end
 -- so the displayed worked and remaining times always add up to the target.
 function Model.live(snapshot: Snapshot, nowMs: number): Live
   local today = snapshot.today
-  local running = today.openStartMs and math.max(0, nowMs - today.openStartMs) - today.removedInOpenMs or 0
+  local running = today.openStartMs and math.max(0, nowMs - today.openStartMs) or 0
   local worked = today.workedClosedMs + running
   local target = today.targetMs
   local remaining = math.max(0, target - worked // MINUTE_MS * MINUTE_MS)

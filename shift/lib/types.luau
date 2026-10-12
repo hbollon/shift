@@ -18,18 +18,9 @@ export type Session = { id: string, startS: number, endS: number, origin: Origin
 -- that was not running, treated like `sleep`.
 export type AwaySignal = "idle" | "lock" | "sleep" | "gap"
 
--- A resolved absence of the ledger (spec §6.3.5): `removed` time is not worked.
-export type Absence = {
-  id: string,
-  startS: number,
-  endS: number,
-  signals: { AwaySignal },
-  status: "kept" | "removed",
-  resolvedBy: "user" | "auto",
-}
-
 -- An absence waiting for the user's decision, counted as work meanwhile. Pending absences
--- live in state.json until resolved, like the open session until check-out.
+-- live in state.json until resolved, like the open session until check-out. Once decided
+-- they leave no record: kept time stays in its session, removed time is cut out of it.
 export type PendingAbsence = {
   id: string,
   date: string, -- workday of the session it interrupted
@@ -41,7 +32,6 @@ export type PendingAbsence = {
 -- One workday of the ledger.
 export type Day = {
   sessions: { Session },
-  absences: { Absence },
   flags: { [string]: boolean },
   note: string,
 }
@@ -49,12 +39,22 @@ export type Day = {
 -- ledger/YYYY.json; days are keyed by "YYYY-MM-DD".
 export type Ledger = { schema: number, days: { [string]: Day } }
 
+-- A removed absence cut out of a session (spec §6.3.5): `session` as it was, and the
+-- recorded pieces left around the absence. When the session was open, it went on as
+-- `openId` from the end of the absence.
+export type Cut = {
+  session: OpenSession | Session,
+  date: string,
+  pieces: { { date: string, id: string } },
+  openId: string?,
+}
+
 -- An undoable action (spec §6.8.4). `id` names the action and the session it touched,
 -- so an undo command can target it idempotently.
 export type UndoEntry =
   { id: string, action: "checkin", atS: number, session: OpenSession }
   | { id: string, action: "checkout", atS: number, session: Session, date: string, recorded: boolean }
-  | { id: string, action: "resolve", atS: number, absence: Absence, date: string }
+  | { id: string, action: "resolve", atS: number, absence: PendingAbsence, cut: Cut? }
 
 -- What the signals currently say; nil fields are unknown (no backend, or not reported yet).
 export type Presence = { idle: boolean?, locked: boolean?, asleep: boolean? }
@@ -144,11 +144,10 @@ export type Snapshot = {
     date: string,
     workedClosedMs: number,
     openStartMs: number?, -- nil when off, or when the open session started on an earlier workday
-    removedInOpenMs: number,
     targetMs: number,
     isWorkday: boolean,
     sessions: { { startS: number, endS: number } }, -- closed sessions, in order
-    absences: { { startS: number, endS: number, status: "kept" | "removed" | "pending" } },
+    absences: { { startS: number, endS: number } }, -- pending, in order
   },
   week: { workedMs: number, targetMs: number }, -- closed sessions; UIs add the open one
   pending: { { id: string, startS: number, endS: number, signal: AwaySignal } }, -- oldest first
@@ -201,8 +200,6 @@ export type Event = {
 export type Effect =
   { type: "ledger.addSession", date: string, session: Session }
   | { type: "ledger.removeSession", date: string, id: string }
-  | { type: "ledger.addAbsence", date: string, absence: Absence }
-  | { type: "ledger.removeAbsence", date: string, id: string }
   | { type: "ledger.setFlag", date: string, flag: string, value: boolean }
   | { type: "state.save" }
   | { type: "publish" }
@@ -215,7 +212,12 @@ export type WindowProbe = {
   nextEdge: (epochS: number) -> number?, -- nil: no change in sight
 }
 
-export type ReduceContext = { nowS: number, settings: Settings, window: WindowProbe? }
+export type ReduceContext = {
+  nowS: number,
+  settings: Settings,
+  window: WindowProbe?,
+  dayOf: ((dateKey: string) -> Day?)?, -- recorded days, read to cut removed absences out
+}
 
 -- Commands (lib/commands.luau, spec §9.3) ---------------------------------------------
 

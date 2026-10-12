@@ -179,8 +179,9 @@ t.describe("automation.onboarding", function()
 end)
 
 -- Scenarios -------------------------------------------------------------------------
--- A scenario feeds events to the reducer with the window of its settings and keeps
--- every effect. 2026-10-09 is a Friday; the default window is 08:00–19:00 on Mon–Fri.
+-- A scenario feeds events to the reducer with the window of its settings, keeps every
+-- effect and applies the session effects to a ledger of its own. 2026-10-09 is a Friday;
+-- the default window is 08:00–19:00 on Mon–Fri.
 
 local FRI, SAT = "2026-10-09", "2026-10-10"
 
@@ -208,14 +209,32 @@ local function scenario(config, state)
       return Rules.nextEdge(compiled, epochS, Rules.NO_CALENDAR)
     end,
   }
-  local sc = { state = state or { schema = 1 }, effects = {} }
+  local sc = { state = state or { schema = 1 }, effects = {}, days = {} }
+  local function dayOf(date)
+    return sc.days[date]
+  end
   function sc.send(event, nowS)
-    local next, effects, result = Automation.reduce(sc.state, event, { nowS = nowS, settings = settings, window = window })
+    local next, effects, result =
+      Automation.reduce(sc.state, event, { nowS = nowS, settings = settings, window = window, dayOf = dayOf })
     sc.state = next
     for _, effect in effects do
       table.insert(sc.effects, effect)
+      if effect.type == "ledger.addSession" then
+        sc.days[effect.date] = sc.days[effect.date] or Model.newDay()
+        t.expect((Model.addSession(sc.days[effect.date], effect.session))).toBe(true)
+      elseif effect.type == "ledger.removeSession" then
+        t.expect(Model.removeSession(sc.days[effect.date], effect.id)).toBe(true)
+      end
     end
     return result
+  end
+  -- Recorded sessions of a day as { startS, endS } pairs, in order.
+  function sc.sessions(date)
+    local list = {}
+    for _, session in sc.days[date] and sc.days[date].sessions or {} do
+      table.insert(list, { session.startS, session.endS })
+    end
+    return list
   end
   function sc.signal(signal, nowS)
     return sc.send({ type = "signal", signal = signal, atS = nowS }, nowS)
@@ -334,31 +353,87 @@ t.describe("automation.checkout", function()
 end)
 
 t.describe("automation.absences", function()
-  t.it("records a long absence as pending, resolvable and undoable", function()
+  t.it("records a long absence as pending and cuts it out of the open session when removed", function()
     local sc = scenario()
     sc.send({ type = "checkin" }, at(FRI, 9))
-    sc.signal("lock", at(FRI, 10, 12))
+    local first = sc.state.open
+    sc.signal("lock", at(FRI, 12))
     t.expect(Model.status(sc.state, Model.readSettings(function() end))).toBe("away")
-    sc.signal("unlock", at(FRI, 10, 54))
-    local id = Model.absenceId(at(FRI, 10, 12))
+    sc.signal("unlock", at(FRI, 13))
+    local id = Model.absenceId(at(FRI, 12))
     t.expect(sc.state.pending).toEqual({
-      { id = id, date = FRI, startS = at(FRI, 10, 12), endS = at(FRI, 10, 54), signals = { "lock" } },
+      { id = id, date = FRI, startS = at(FRI, 12), endS = at(FRI, 13), signals = { "lock" } },
     })
     t.expect(sc.state.absence).toBeNil()
 
-    sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 11))
+    -- Checked out at the absence start, back in on return.
+    sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 14))
     t.expect(sc.state.pending).toBeNil()
-    local added = sc.of("ledger.addAbsence")[1]
-    t.expect(added.date).toBe(FRI)
-    t.expect(added.absence.status).toBe("removed")
-    t.expect(added.absence.resolvedBy).toBe("user")
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 12) } })
+    t.expect(sc.days[FRI].sessions[1].id).toBe(first.id)
+    t.expect(sc.state.open).toEqual({ id = Model.sessionId(at(FRI, 13)), startS = at(FRI, 13), origin = "manual" })
     -- Delivered twice: nothing more happens.
-    local again = sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 11))
+    local again = sc.send({ type = "absence.resolve", id = id, keep = false }, at(FRI, 14))
     t.expect(again.changed).toBe(false)
 
-    sc.send({ type = "undo", id = "resolve:" .. id }, at(FRI, 11, 1))
-    t.expect(sc.of("ledger.removeAbsence")[1].id).toBe(id)
+    sc.send({ type = "undo", id = "resolve:" .. id }, at(FRI, 14, 1))
+    t.expect(sc.sessions(FRI)).toEqual({})
+    t.expect(sc.state.open).toEqual(first)
     t.expect(sc.state.pending[1].id).toBe(id)
+  end)
+
+  t.it("leaves the session whole when an absence is kept", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    local open = sc.state.open
+    sc.signal("lock", at(FRI, 12))
+    sc.signal("unlock", at(FRI, 13))
+    local id = sc.state.pending[1].id
+    local before = #sc.effects
+    sc.send({ type = "absence.resolve", id = id, keep = true }, at(FRI, 14))
+    t.expect(sc.state.pending).toBeNil()
+    t.expect(sc.state.open).toBe(open)
+    t.expect(types({ table.unpack(sc.effects, before + 1) })).toEqual({ "state.save", "publish" })
+    sc.send({ type = "undo", id = "resolve:" .. id }, at(FRI, 14, 1))
+    t.expect(sc.state.pending[1].id).toBe(id)
+  end)
+
+  t.it("cuts a removed absence out of a closed session", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 12))
+    sc.signal("unlock", at(FRI, 13))
+    sc.send({ type = "checkout" }, at(FRI, 17))
+    sc.send({ type = "absence.resolve", id = sc.state.pending[1].id, keep = false }, at(FRI, 17, 5))
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 12) }, { at(FRI, 13), at(FRI, 17) } })
+    t.expect(sc.days[FRI].sessions[2].id).toBe(Model.sessionId(at(FRI, 13)))
+    t.expect(sc.state.open).toBeNil()
+
+    sc.send({ type = "undo" }, at(FRI, 17, 6))
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 17) } })
+    t.expect(#sc.state.pending).toBe(1)
+  end)
+
+  t.it("moves the session start when the absence opens it", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.send({ type = "start", startS = at(FRI, 9) }, at(FRI, 10))
+    sc.send({ type = "absence.resolve", id = sc.state.pending[1].id, keep = false }, at(FRI, 10, 1))
+    t.expect(sc.sessions(FRI)).toEqual({})
+    t.expect(sc.state.open.startS).toBe(at(FRI, 10))
+  end)
+
+  t.it("undoes a removal only while the session that went on is open", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 12))
+    sc.signal("unlock", at(FRI, 13))
+    sc.send({ type = "absence.resolve", id = sc.state.pending[1].id, keep = false }, at(FRI, 13, 1))
+    sc.send({ type = "checkout" }, at(FRI, 13, 2))
+    sc.send({ type = "undo" }, at(FRI, 13, 3)) -- reopens the afternoon session
+    sc.send({ type = "undo" }, at(FRI, 13, 4)) -- joins it back to the morning
+    t.expect(sc.sessions(FRI)).toEqual({})
+    t.expect(sc.state.open.startS).toBe(at(FRI, 9))
   end)
 
   t.it("counts short absences as work (E11)", function()
@@ -367,7 +442,7 @@ t.describe("automation.absences", function()
     sc.signal("idle", at(FRI, 10, 10)) -- inactive since 10:05
     sc.signal("active", at(FRI, 10, 19))
     t.expect(sc.state.pending).toBeNil()
-    t.expect(#sc.of("ledger.addAbsence")).toBe(0)
+    t.expect(sc.state.open.startS).toBe(at(FRI, 9))
   end)
 
   t.it("dates idle absences back by the idle timeout", function()
@@ -391,14 +466,13 @@ t.describe("automation.absences", function()
     sc.signal("active", at(FRI, 13, 31)) -- on the lock screen: not activity
     t.expect(sc.state.absence).toBeTruthy()
     sc.signal("unlock", at(FRI, 13, 32))
-    local removed = sc.of("ledger.addAbsence")[1].absence
-    t.expect(removed.startS).toBe(at(FRI, 12))
-    t.expect(removed.endS).toBe(at(FRI, 13, 32))
-    t.expect(removed.signals).toEqual({ "idle", "lock", "sleep" })
-    t.expect(removed.status).toBe("removed")
-    t.expect(removed.resolvedBy).toBe("auto")
-    t.expect(sc.state.open).toBeTruthy()
+    -- Removed without asking (deduct), still undoable back to pending.
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 12) } })
+    t.expect(sc.state.open.startS).toBe(at(FRI, 13, 32))
     t.expect(sc.state.undo[#sc.state.undo].action).toBe("resolve")
+    sc.send({ type = "undo" }, at(FRI, 13, 33))
+    t.expect(sc.state.open.startS).toBe(at(FRI, 9))
+    t.expect(sc.state.pending[1].signals).toEqual({ "idle", "lock", "sleep" })
   end)
 
   t.it("ignores absences when the action is ignore", function()
@@ -504,10 +578,32 @@ t.describe("automation.rollover", function()
     sc.signal("unlock", at(FRI, 15))
     sc.send({ type = "checkout" }, at(FRI, 17))
     sc.send({ type = "tick" }, at(SAT, 9))
-    local absences = sc.of("ledger.addAbsence")
-    t.expect(#absences).toBe(2)
-    t.expect(absences[1].absence.status).toBe("removed")
-    t.expect(absences[2].absence.resolvedBy).toBe("auto")
+    t.expect(sc.sessions(FRI)).toEqual({
+      { at(FRI, 9), at(FRI, 10) },
+      { at(FRI, 11), at(FRI, 14) },
+      { at(FRI, 15), at(FRI, 17) },
+    })
+    t.expect(sc.state.pending).toBeNil()
+  end)
+
+  t.it("cuts the pending absences of a forgotten session once it is closed", function()
+    local sc = scenario({ unresolved_absence = "remove" })
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 12))
+    sc.signal("unlock", at(FRI, 13))
+    sc.ticks(at(FRI, 18), at(FRI, 18))
+    sc.send({ type = "tick" }, at(SAT, 9))
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 12) }, { at(FRI, 13), at(FRI, 18) } })
+  end)
+
+  t.it("keeps pending absences as work by default", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 12))
+    sc.signal("unlock", at(FRI, 13))
+    sc.send({ type = "checkout" }, at(FRI, 17))
+    sc.send({ type = "tick" }, at(SAT, 9))
+    t.expect(sc.sessions(FRI)).toEqual({ { at(FRI, 9), at(FRI, 17) } })
     t.expect(sc.state.pending).toBeNil()
   end)
 

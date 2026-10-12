@@ -424,20 +424,15 @@ local function todaySessions(snap: Snapshot, nowS: number): { { startS: number, 
   return list
 end
 
--- A box without a fill is drawn black.
-local TRANSPARENT = "on_surface/0"
-
--- Look of each kind of timeline segment (spec §7.4.5): removed absences are drawn as an
--- outline, so the gap they leave in the session stays visible.
+-- Look of each kind of timeline segment (spec §7.4.5). Decided absences are not drawn:
+-- kept time is work, removed time is a gap between sessions.
 local SEGMENT_STYLES = {
-  work = { fill = "primary" },
-  kept = { fill = "primary/0.4" },
-  pending = { fill = "secondary/0.6" },
-  removed = { fill = TRANSPARENT, border = "outline", borderWidth = 1 },
-  gap = { fill = "on_surface/0.08" },
+  work = "primary",
+  pending = "secondary/0.6",
+  gap = "on_surface/0.08",
 }
 
--- Splits the day into segments: gaps, worked time, and the absences inside sessions.
+-- Splits the day into segments: gaps, worked time, and the pending absences inside sessions.
 local function segmentsOf(sessions, absences, fromS: number, toS: number): { { kind: string, startS: number, endS: number } }
   local segments = {}
   local function push(kind: string, startS: number, endS: number)
@@ -453,7 +448,7 @@ local function segmentsOf(sessions, absences, fromS: number, toS: number): { { k
       local startS, endS = math.max(absence.startS, at), math.min(absence.endS, session.endS)
       if endS > startS then
         push("work", at, startS)
-        push(absence.status, startS, endS)
+        push("pending", startS, endS)
         at = endS
       end
     end
@@ -473,14 +468,11 @@ local function timeline(sessions, absences, nowS: number): UiNode
   local toS = last - (last % 3600) + 3600
   local segments = {}
   for _, segment in segmentsOf(sessions, absences, fromS, toS) do
-    local style = SEGMENT_STYLES[segment.kind]
     table.insert(segments, ui.box({
       flexGrow = math.max(segment.endS - segment.startS, 60),
       height = 10,
       radius = 3,
-      fill = style.fill,
-      border = style.border,
-      borderWidth = style.borderWidth,
+      fill = SEGMENT_STYLES[segment.kind],
     }))
   end
   return ui.column({ gap = 4 }, {

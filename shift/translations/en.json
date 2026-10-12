@@ -82,12 +82,7 @@
       "title": "Today",
       "empty": "No sessions yet today.",
       "range": "{from} – {to}",
-      "now": "now",
-      "absence": {
-        "kept": "Away, counted",
-        "removed": "Away, removed",
-        "pending": "Away, to review"
-      }
+      "now": "now"
     },
     "errors": {
       "command": "Shift did not respond. Try again.",

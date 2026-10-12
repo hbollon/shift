@@ -113,12 +113,12 @@ automation to do the boring part but stay in control.
 | **Workday** | The tracking day. Starts at `day_start_hour` (default 04:00 local) and lasts 24 h, so late-night work belongs to the day it started. A session belongs to the workday its `start` falls in. |
 | **Workdays (contract)** | Weekdays on which the contract expects work (default Mon–Fri). |
 | **Daily target** | Expected work for a workday: `weekly_hours / count(workdays)` on a contract workday that is not a public holiday, else `0`. |
-| **Worked** | `Σ session durations − Σ removed absences` for a workday. |
+| **Worked** | `Σ session durations` for a workday. Removed absences are cut out of sessions (§6.3.5). |
 | **Delta** | `worked − target` for a workday. |
 | **Balance** | `initial_balance + Σ delta(closed workdays since tracking start) + Σ adjustments`. Excludes today (see §6.6). |
 | **Adjustment** | A signed manual entry in the balance ledger (e.g. `−2:00 "Dentist"`). |
 | **Signal** | An observed system event: `idle`/`active`, `lock`/`unlock`, `sleep`/`resume`, `offline gap`. |
-| **Absence** | An interval during an open session where signals say the user was away. Has a status: `pending`, `kept`, `removed`. |
+| **Absence** | An interval during an open session where signals say the user was away. Pending until decided: a kept absence stays work, a removed one is cut out of its session. |
 | **Window** | The set of instants where automation is allowed to act, computed from **schedule rules**. |
 | **Rule** | One line of the schedule DSL, including (`+`) or excluding (`−`) days, dates, time ranges, or holidays. |
 | **Override** | A manual action that suppresses contrary automation until the current window segment ends. |
@@ -192,7 +192,7 @@ stateDiagram-v2
     Off --> Working: check in (manual · auto · IPC)
     Working --> Off: check out (manual · auto · IPC · rollover)
     Working --> Away: absence signal (action ≠ ignore)
-    Away --> Working: return — short absence kept silently,\nask → pending, deduct → removed
+    Away --> Working: return — short absence kept silently,\nask → pending, deduct → cut out
     Away --> Off: action = checkout and absence ≥ threshold\n(session closed at absence start)
     Away --> Off: manual check out
 ```
@@ -351,11 +351,16 @@ candidate**. Overlapping signals merge into one absence: start = earliest start,
 |--------|---------|
 | `ignore` | Nothing is recorded. The state stays `working`. |
 | `ask` *(default)* | On return, if duration ≥ `min_absence_min`, the absence is recorded as `pending`. Time is counted provisionally until resolved. |
-| `deduct` | On return, if duration ≥ `min_absence_min`, the absence is recorded as `removed`. The session stays open and remains reversible. |
+| `deduct` | On return, if duration ≥ `min_absence_min`, the absence is removed at once, as below. Reversible like a decision. |
 | `checkout` | As soon as the absence duration crosses `min_absence_min` (even while still away), the session is closed at the absence start. On return, auto check-in may apply. |
 
 Absences shorter than `min_absence_min` (default 15 min) are always counted as work and not recorded. Micro-breaks
 are part of work.
+
+**Removing an absence** cuts it out of its session: the session ends at the absence start and a new one starts at
+its end (a check-out and a check-in). An open session goes on as the new one; a closed session is split in two. The
+timeline shows the gap, worked time is simply the sum of the sessions, and the day editor edits two plain sessions.
+**Counting it as work** leaves the session whole. Either way the absence leaves no record once decided.
 
 **Resolution UX (pending).** On return the bar widget switches to an attention state. The panel shows a card per
 pending absence: *"Away 10:12 → 10:54 (42 min) — Locked screen"* with **[Count as work]** **[Remove]**. When
@@ -381,7 +386,7 @@ All computations use epoch seconds (DST-safe). Workday attribution uses local ti
 
 | Counter | Formula |
 |--------|---------|
-| `today.worked` | `Σ closed sessions + (open ? now − open.start : 0) − Σ removed absences` (pending counted) |
+| `today.worked` | `Σ closed sessions + (open ? now − open.start : 0)` (pending absences counted) |
 | `today.target` | daily target of the current workday (§6.6) |
 | `today.remaining` | `max(0, target − worked)` |
 | `today.overtime` | `max(0, worked − target)` |
@@ -390,7 +395,7 @@ All computations use epoch seconds (DST-safe). Workday attribution uses local ti
 | `week.worked` / `week.target` | Σ over the ISO week (Mon–Sun) |
 | `balance` | settled balance (excludes today), §6.6 |
 
-UIs receive `workedClosedMs`, `openStartMs` and `removedInOpenMs` in the snapshot and compute the live value
+UIs receive `workedClosedMs` and `openStartMs` in the snapshot and compute the live value
 locally, so the service does not need to publish every second.
 
 ### 6.6 Contract, targets and balance
@@ -473,7 +478,8 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 - For a missing day, the three review actions of §6.6 are shown above the (empty) session list.
 - **Day off** toggle (§6.6.1).
 - Sessions list: start/end text inputs, computed duration, delete button. **Add session** button.
-- Absences list (for that day): time range, signal, status with a Keep/Remove toggle.
+- Pending absences of that day: time range, signal, **[Count as work]** **[Remove]** (decided absences are already
+  reflected in the sessions).
 - **Save** validates and applies everything atomically; **Cancel** discards.
 
 #### 6.8.3 Time input parsing and validation
@@ -490,7 +496,8 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
   naming it, "Undo check out at 17:02"), `ctrl+z` in the panel, and IPC (`undo`). Consecutive undos chain while the
   entries are younger than 10 minutes; older entries stay in the stack but are never undone, so an action from this
   morning cannot be reverted by mistake.
-- Absence decisions are undone back to *pending*; an automatic `deduct` counts as a decision. The stack is cleared at
+- Absence decisions are undone back to *pending*, joining a cut session back; an automatic `deduct` counts as a
+  decision. The stack is cleared at
   the workday rollover, whose closing of a forgotten session is reviewed in the day editor instead.
 - Undo commands from the UIs name the entry they revert (`{ type = "undo", id = "checkout:s_…" }`): delivered twice,
   the second finds another entry on top and does nothing (§9.3). IPC `undo` reverts the top entry.
@@ -690,8 +697,8 @@ opens the relevant tab.
 
 #### 7.4.5 Tabs
 - **Today**: day timeline (a row of proportional `ui.box` segments from `day_start_hour` to now, sessions in
-  `primary`, kept absences in `primary/0.4`, removed absences hatched via `outline` border, gaps in
-  `surface_variant/0.4`, pending absences in `secondary/0.6`), followed by the session list, most recent first (the
+  `primary`, gaps in `on_surface/0.08`, pending absences in `secondary/0.6`; a kept absence is drawn as work, a removed
+  one is a gap between two sessions), followed by the session list, most recent first (the
   running session stays on top). A long list scrolls with the panel body. Clicking a session opens the day editor.
 - **History**: week view by default, with a week/month toggle (§6.8.1). Bars use `primary` up to the target and
   `tertiary` above it. A target tick is drawn with an `outline` 1 px box. Holidays show `beach`, missing days show
@@ -864,13 +871,12 @@ deterministic and fully testable with a fake clock.
   since = 1791529020,          -- epoch s of the current status start
   today = {
     date = "2026-10-09",
-    workedClosedMs = 12840000, -- closed sessions minus removed absences
+    workedClosedMs = 12840000, -- closed sessions
     openStartMs = 1791547320000, -- nil when off
-    removedInOpenMs = 0,
     targetMs = 25200000,
     isWorkday = true, holiday = nil,
     sessions = { { startS = 1791529020, endS = 1791541860 } }, -- closed sessions, for the Today view
-    absences = { { startS = 1791540720, endS = 1791543240, status = "pending" } }, -- kept | removed | pending
+    absences = { { startS = 1791540720, endS = 1791543240 } }, -- today's pending absences, for the timeline
   },
   week = { workedMs = 101400000, targetMs = 126000000 }, -- closed sessions; UIs add the open one
   balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
@@ -901,7 +907,7 @@ and a random number, e.g. `bar.19a1208aa73b-5f3a9c`, so two bar widgets or a rel
 ```lua
 { from = "bar.19a1208aa73b-5f3a9c", cmds = { { seq = 42, type = "checkout" } } }
 { from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 43, type = "absence.resolve", id = "a_8f2c", keep = false } } }
-{ from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 44, type = "day.save", date = "2026-10-08", sessions = { … }, absences = { … } } } }
+{ from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 44, type = "day.save", date = "2026-10-08", sessions = { … } } } }
 { from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 45, type = "adjust.add", id = "j_7c", date = "2026-10-09", minutes = -120, note = "Dentist" } } }
 ```
 
@@ -981,8 +987,6 @@ schema migration, whatever the date.
   "days": {
     "2026-10-08": {
       "sessions": [ { "id": "s_00", "startS": 1791443820, "endS": 1791456660, "origin": "auto" } ],
-      "absences": [ { "id": "a_7a", "startS": 1791450000, "endS": 1791452400,
-                      "signals": ["lock"], "status": "kept", "resolvedBy": "user" } ],
       "flags": { "needsReview": false, "dayOff": false, "missingConfirmed": false },
       "note": ""
     }
@@ -1240,6 +1244,7 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D30 | UI → service commands share one key, with per-runtime sender ids, acknowledgement, retry, at-most-once processing and idempotent command types. | State-watch events can be dropped when an entry's queue is full (spike S5). The service cannot enumerate per-sender keys, and idempotency covers a service reload. |
 | D31 | The hero counter is drawn over the ring with a negative-`gap` column, confined to one helper (`lib/ui/overlay.luau`). | Noctalia has no stacking container; the overlay keeps the spec's design, and a breaking host change only touches that helper (fallback: text next to the ring). |
 | D32 | Undo works for 10 minutes from every surface (button, `ctrl+z`, IPC); undos chain while entries are recent. | One rule everywhere, and no risk of reverting an old action by accident. |
-| D33 | Pending absences live in `state.json` until resolved; resolved ones go to the ledger with `kept`/`removed`. | Same model as the open session: the ledger only holds settled facts, and the reducer never reads it. Pending absences only exist for the current workday, since the rollover resolves them. |
+| D33 | Pending absences live in `state.json` until resolved. | Same model as the open session: the ledger only holds settled facts. Pending absences only exist for the current workday, since the rollover resolves them. |
 | D34 | Signal streams run inside a small shell wrapper that reports their process group and exit status; the service stops a stream by killing its group. | `runStream` cannot stop a stream nor report its end (S1), and a stale `swayidle` would keep one of the 4 stream slots of the entry until the plugin reloads. |
 | D35 | The panel body scrolls between a fixed header/status and a fixed automation footer, instead of a scrolling session list. | Attention cards come and go; one scroll handles every overflow, and the footer stays reachable. |
+| D36 | A removed absence is cut out of its session (check-out at its start, check-in at its end); decided absences leave no other record. The reducer reads recorded days for that cut only. | Work periods stay readable on the timeline, undo can join the session back, and sessions alone give worked time, so the day editor, history and export never subtract absences. Replaces `kept`/`removed` absence records subtracted from worked time. |
