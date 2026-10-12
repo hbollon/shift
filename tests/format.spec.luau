@@ -13,6 +13,13 @@ t.describe("format.duration", function()
     t.expect(Format.duration(41 * H, "bogus")).toBe("41:00")
   end)
 
+  t.it("splits a duration into numbers and units", function()
+    t.expect(Format.parts("7h 05m")).toEqual({ { number = "7", unit = "h" }, { number = "05", unit = "m" } })
+    t.expect(Format.parts("45m")).toEqual({ { number = "45", unit = "m" } })
+    t.expect(Format.parts("7:30")).toEqual({ { number = "7:30", unit = "" } })
+    t.expect(Format.parts("7.50 h")).toEqual({ { number = "7.50", unit = "h" } })
+  end)
+
   t.it("formats the units style", function()
     t.expect(Format.duration(7 * H + 5 * M, "units")).toBe("7h 05m")
     t.expect(Format.duration(7 * H, "units")).toBe("7h")

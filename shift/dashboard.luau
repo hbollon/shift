@@ -15,9 +15,18 @@ local Types = require("./lib/types.luau")
 type Snapshot = Types.Snapshot
 type Live = Types.Live
 
-local HERO_RING = 148
+local HERO_RING = 168
 local HERO_STROKE = 11
+-- Space between the ring and the check-in button.
+local HERO_BUTTON_GAP = 14
 local COUNTER_SIZE = 36
+local COUNTER_MIN = 22
+-- Width the counter may take inside the ring. The lines below it lift it above the
+-- center, where the ring is narrower.
+local COUNTER_ROOM = HERO_RING - 2 * HERO_STROKE - 24
+local UNIT_SCALE = 0.55 -- unit letters next to the counter's numbers
+local SECONDS_SIZE = 16
+local COUNTER_GAP = 2
 local DETAIL_SIZE = 13
 local RADIUS = 12
 local ROW_HEIGHT = 22
@@ -288,23 +297,63 @@ local function heroDetails(live: Live, fmt: Types.DurationFormat): { UiNode }
   return details
 end
 
+-- Rough advance width in em of a bold UI font as wide as DejaVu Sans, to keep the
+-- counter inside the ring.
+local function ems(text: string): number
+  local total = 0
+  for char in string.gmatch(text, ".") do
+    if string.match(char, "%d") then
+      total += 0.7
+    elseif char == "m" then
+      total += 1.05
+    elseif string.match(char, "%a") then
+      total += 0.72
+    else
+      total += 0.4
+    end
+  end
+  return total
+end
+
+-- The worked time in large numbers with smaller units ("7h 30m"), shrunk when it would
+-- not fit inside the ring ("10:30"). Seconds tick discreetly after the colon format only:
+-- the other formats are too wide for them.
+local function counter(ms: number, fmt: Types.DurationFormat): (UiNode, number)
+  local parts = Format.parts(Format.duration(ms, fmt))
+  local seconds = fmt == "colon" and string.format(":%02d", ms // 1000 % 60) or nil
+  local scaled, labels = 0, #parts
+  for index, part in parts do
+    scaled += ems((index > 1 and " " or "") .. part.number) + ems(part.unit) * UNIT_SCALE
+    labels += if part.unit ~= "" then 1 else 0
+  end
+  local fixed = 0
+  if seconds then
+    labels += 1
+    fixed += ems(seconds) * SECONDS_SIZE * 0.9 -- regular weight: narrower
+  end
+  fixed += (labels - 1) * COUNTER_GAP
+  local size = math.clamp(math.floor((COUNTER_ROOM - fixed) / scaled), COUNTER_MIN, COUNTER_SIZE)
+
+  local nodes = {}
+  for index, part in parts do
+    table.insert(nodes, ui.label({ text = (index > 1 and " " or "") .. part.number, fontSize = size, fontWeight = "bold" }))
+    if part.unit ~= "" then
+      table.insert(nodes, ui.label({ text = part.unit, fontSize = math.round(size * UNIT_SCALE), fontWeight = "bold" }))
+    end
+  end
+  if seconds then
+    table.insert(nodes, ui.label({ text = seconds, fontSize = SECONDS_SIZE, color = "on_surface_variant" }))
+  end
+  return ui.row({ align = "end", gap = COUNTER_GAP }, nodes), size
+end
+
 local function hero(snap: Snapshot, live: Live): UiNode
   local working = snap.status ~= "off"
   local fmt = snap.display.durationFormat
-  -- Discreet seconds, written to match the duration format ("5:42:17", "5h 42m 17s").
-  local counterParts = { ui.label({ text = Format.duration(live.workedMs, fmt), fontSize = COUNTER_SIZE, fontWeight = "bold" }) }
-  local seconds = live.workedMs // 1000 % 60
-  if fmt ~= "decimal" then
-    table.insert(counterParts, ui.label({
-      text = string.format(fmt == "units" and " %02ds" or ":%02d", seconds),
-      fontSize = 16,
-      color = "on_surface_variant",
-    }))
-  end
-  local counter = ui.row({ align = "end", gap = 2 }, counterParts)
+  local count, size = counter(live.workedMs, fmt)
   local details = heroDetails(live, fmt)
-  local text = ui.column({ align = "center", gap = 0 }, { counter, table.unpack(details) })
-  local textHeight = COUNTER_SIZE * 1.25 + #details * DETAIL_SIZE * 1.35
+  local text = ui.column({ align = "center", gap = 0 }, { count, table.unpack(details) })
+  local textHeight = size * 1.25 + #details * DETAIL_SIZE * 1.35
 
   -- Without a target the ring only frames the counter: an empty track.
   local progress = live.targetMs > 0 and live.workedMs / live.targetMs or 0
@@ -330,7 +379,7 @@ local function hero(snap: Snapshot, live: Live): UiNode
       send({ type = working and "checkout" or "checkin" })
     end,
   }))
-  return ui.column({ align = "center", gap = 8 }, children)
+  return ui.column({ align = "center", gap = HERO_BUTTON_GAP }, children)
 end
 
 -- Stat tiles (spec §7.4.4) ------------------------------------------------------------

@@ -28,6 +28,17 @@ function Format.duration(ms: number, style: string?): string
   return string.format("%s%d:%02d", sign, hours, rest)
 end
 
+-- Splits a formatted duration into its numbers and the unit after each, so a large
+-- counter can draw units smaller: "7h 30m" -> { "7", "h" }, { "30", "m" }; "7:30" ->
+-- { "7:30", "" }; "7.50 h" -> { "7.50", "h" }.
+function Format.parts(text: string): { { number: string, unit: string } }
+  local parts = {}
+  for number, unit in string.gmatch(text, "([^%a%s]+)%s*(%a*)") do
+    table.insert(parts, { number = number, unit = unit })
+  end
+  return parts
+end
+
 -- Short form for narrow places such as a vertical bar: "5h", or "42m" under an hour.
 function Format.compact(ms: number): string
   local minutes = math.max(0, ms) // 60000

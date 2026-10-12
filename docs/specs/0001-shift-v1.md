@@ -628,7 +628,7 @@ or state changes).
 
 ### 7.4 Panel (`hbollon/shift:dashboard`)
 
-Manifest defaults: `width = 400`, `height = 660`, `placement = "attached"`, `position = "auto"`,
+Manifest defaults: `width = 400`, `height = 686`, `placement = "attached"`, `position = "auto"`,
 `open_near_click = true`. Second ticks are enabled while open. The header and status chip stay at the top and the
 automation footer at the bottom; everything between them (attention cards, hero, stat tiles, tabs) scrolls when it
 does not fit (D35).
@@ -672,12 +672,13 @@ Stacked cards, most recent first, with a maximum of 3 (then "+2 more → History
 days flagged `needsReview`, and missing days to review (one grouped card: *"2 days to review"* → History).
 
 #### 7.4.3 Hero
-Ring (≈150 px) with `H:MM` in large bold and the seconds small and muted (`:SS`, or `SSs` with the `7h 30m` format,
-none with the decimal format), *"of 7:00"*, *"1:18 left"* or *"+0:23 over"* (in
+Ring (168 px) with the worked time in large bold, units smaller (`7h 30m`, `7.50 h`), and with the `H:MM` format the
+seconds small and muted (`:SS`); the other formats are too wide for them. The counter shrinks when it would not fit
+inside the ring (`10:30`), *"of 7:00"*, *"1:18 left"* or *"+0:23 over"* (in
 `tertiary`). The estimated end, *"Done at ~17:36"*, sits at the right of the status chip while working, to keep the
 hero compact. On non-workdays it shows *"No target today"* and the ring
-shows worked time with a neutral track. The primary button is **Check in** (`primary` variant) or **Check out**
-(`outline` variant).
+shows worked time with a neutral track. The primary button, 14 px below the ring, is **Check in** (`primary` variant)
+or **Check out** (`outline` variant).
 
 The counter sits inside the ring through `lib/ui/overlay.luau` (C8, D31). If the overlay ever stops working, only that
 helper changes, to place the text next to the ring.
@@ -1129,7 +1130,7 @@ entry = "bar.luau"
 id              = "dashboard"
 entry           = "dashboard.luau"
 width           = 400
-height          = 660
+height          = 686
 placement       = "attached"
 position        = "auto"
 open_near_click = true
