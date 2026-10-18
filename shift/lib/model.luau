@@ -62,6 +62,13 @@ local function choice(value: any, allowed: { [string]: boolean }, default: strin
   return allowed[value] and value or default
 end
 
+local function code(value: any): string
+  if type(value) ~= "string" then
+    return ""
+  end
+  return string.upper((string.gsub(value, "%s+", "")))
+end
+
 local function strings(value: any): { string }
   local list = {}
   if type(value) == "table" then
@@ -121,6 +128,11 @@ function Model.readSettings(getConfig: (key: string) -> any): Settings
       ["end"] = type(endText) == "string" and endText or "19:00",
       excludeHolidays = getConfig("window_exclude_holidays") ~= false,
       extraRules = strings(getConfig("extra_rules")),
+    },
+    holidays = {
+      enabled = getConfig("holidays_enabled") ~= false,
+      country = code(getConfig("holiday_country")),
+      region = code(getConfig("holiday_region")),
     },
   }
 end

@@ -32,6 +32,7 @@ function Host.new(): Types.Host
     togglePanel = noctalia.togglePanel,
     runStream = noctalia.runStream,
     runAsync = noctalia.runAsync,
+    http = noctalia.http,
     commandExists = noctalia.commandExists,
     getenv = noctalia.getenv,
     log = noctalia.log,

@@ -666,6 +666,14 @@ function handlers.tick(s, _event)
   return nil
 end
 
+-- Holidays or days off changed: the window is evaluated afresh by the next tick, without
+-- treating the change as an edge.
+function handlers.calendar(s, _event)
+  s.state.window = nil
+  s.touched = true
+  return nil
+end
+
 -- New settings: the window is evaluated afresh, without treating the change as an edge,
 -- and suggestions made under the old settings are dropped. When the signal sources were
 -- restarted, what they said is forgotten; the user is changing settings, so active.

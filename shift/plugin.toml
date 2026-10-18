@@ -275,6 +275,32 @@ options = [
   { value = "off", label_key = "settings.idle_backend.off" },
 ]
 
+# Public holidays (spec §6.7, §8.4): the plugin's only network access.
+
+[[setting]]
+key             = "holidays_enabled"
+type            = "bool"
+label_key       = "settings.holidays_enabled.label"
+description_key = "settings.holidays_enabled.description"
+default         = true
+
+[[setting]]
+key             = "holiday_country"
+type            = "string"
+label_key       = "settings.holiday_country.label"
+description_key = "settings.holiday_country.description"
+default         = ""
+visible_when    = { key = "holidays_enabled", values = ["true"] }
+
+[[setting]]
+key             = "holiday_region"
+type            = "string"
+label_key       = "settings.holiday_region.label"
+description_key = "settings.holiday_region.description"
+default         = ""
+advanced        = true
+visible_when    = { key = "holidays_enabled", values = ["true"] }
+
 # --- Entries -------------------------------------------------------------------
 
 [[service]]

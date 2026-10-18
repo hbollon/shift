@@ -7,6 +7,7 @@
 
 local Automation = require("./lib/automation.luau")
 local Commands = require("./lib/commands.luau")
+local Holidays = require("./lib/holidays.luau")
 local Host = require("./lib/host.luau")
 local Idle = require("./lib/signals/idle.luau")
 local Logind = require("./lib/signals/logind.luau")
@@ -43,8 +44,21 @@ local lastTickS = nowS()
 
 -- Automation window ---------------------------------------------------------------
 
--- Holidays and days off are not tracked yet: the `holidays` selector matches nothing.
-local calendar = Rules.NO_CALENDAR
+local holidays: Holidays.Monitor? = nil
+
+local function holidayOf(dateKey: string): string?
+  return holidays and holidays.holiday(dateKey)
+end
+
+-- Days off are not tracked yet.
+local calendar: Types.Calendar = {
+  isHoliday = function(dateKey)
+    return holidayOf(dateKey) ~= nil
+  end,
+  isDayOff = function(_dateKey)
+    return false
+  end,
+}
 local rules: Rules.Compiled
 local preview: { week: string, days: { string } }? = nil
 
@@ -89,9 +103,10 @@ local function automationInfo(now: number): Types.SnapshotAutomation
     preview = { week = week, days = Rules.preview(rules, week, calendar) }
   end
   local hints = {}
-  local hint = idle and idle.hint()
-  if hint and not (state.hints and state.hints[hint]) then
-    table.insert(hints, hint)
+  for _, hint in { idle and idle.hint(), holidays and holidays.hint() } do
+    if not (state.hints and state.hints[hint]) then
+      table.insert(hints, hint)
+    end
   end
   return {
     preset = settings.preset,
@@ -100,6 +115,7 @@ local function automationInfo(now: number): Types.SnapshotAutomation
     backends = {
       idle = idle and idle.health() or "off",
       logind = logind and logind.health() or "off",
+      holidays = holidays and holidays.health() or "off",
     },
     ruleErrors = rules.errors,
     preview = (preview :: any).days,
@@ -229,6 +245,26 @@ if not balance then
   store:saveBalance(balance)
 end
 
+local function configureHolidays()
+  if holidays then
+    holidays.configure({
+      enabled = settings.holidays.enabled,
+      country = settings.holidays.country,
+      region = settings.holidays.region,
+      fromYear = Time.year((balance :: Types.Balance).trackingStart),
+    })
+  end
+end
+
+-- Holidays change the window: it is evaluated afresh, by the next tick, since a
+-- configuration change can happen while effects are being applied.
+local calendarChanged = false
+holidays = Holidays.start(host, function()
+  preview = nil
+  calendarChanged = true
+end)
+configureHolidays()
+
 -- A check-out writes the ledger before the state: if Noctalia stopped in between, the
 -- open session is already recorded and must not stay open.
 if state.open then
@@ -246,6 +282,7 @@ do
   local stale = state.open and heartbeat and nowS() - heartbeat > STALE_HEARTBEAT_S
   dispatch({ type = "start", startS = stale and heartbeat or nil })
 end
+calendarChanged = false -- the start evaluates the window anyway
 startSignals()
 
 -- Commands come from other entries' state writes: only the UI actions and their known
@@ -294,6 +331,14 @@ function update()
   if logind then
     logind.tick()
   end
+  if holidays then
+    holidays.tick()
+  end
+  if calendarChanged then
+    calendarChanged = false
+    dispatch({ type = "calendar" })
+    publish()
+  end
   dispatch({ type = "tick" })
 
   if now - lastSaveS >= HEARTBEAT_S then
@@ -309,6 +354,7 @@ function onConfigChanged()
   local old = settings
   settings = Model.readSettings(host.getConfig)
   compileRules()
+  configureHolidays()
   -- Restart only what the change concerns (spec §8).
   local restarted = false
   if Model.usesSignals(settings) ~= Model.usesSignals(old) then
@@ -343,6 +389,11 @@ function onIpc(event, payload)
     else
       result = dispatch({ type = "absence.resolve", id = oldest.id, keep = arg == "keep" })
     end
+  elseif event == "holidays-refresh" then
+    if holidays then
+      holidays.refresh()
+    end
+    return
   elseif event == "signal" and IPC_SIGNALS[arg] then
     -- External integrations (idle_backend = external, spec §11).
     onSignal(arg, nowS())

@@ -25,6 +25,19 @@ function Time.parseDate(key: string): (number?, number?, number?)
   return tonumber(year), tonumber(month), tonumber(day)
 end
 
+-- Whether `key` is a real calendar date ("2026-02-30" is not).
+function Time.isDate(key: any): boolean
+  if type(key) ~= "string" then
+    return false
+  end
+  local year, month, day = Time.parseDate(key)
+  if not year then
+    return false
+  end
+  local t = os.date("!*t", os.time({ year = year, month = month, day = day, hour = 12 }))
+  return t.year == year and t.month == month and t.day == day
+end
+
 -- Like parseDate, for keys that must be valid: raises on a malformed key.
 local function partsOf(key: string): (number, number, number)
   local year, month, day = Time.parseDate(key)

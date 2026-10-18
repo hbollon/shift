@@ -212,6 +212,18 @@ function FakeHost.new(options)
     })
   end
 
+  -- Each http call: { url, onResponse }. `host.respond(i, response)` answers it.
+  host.requests = {}
+
+  function host.http(req, onResponse)
+    table.insert(host.requests, { url = req.url, onResponse = onResponse })
+    return true
+  end
+
+  function host.respond(index, response)
+    host.requests[index].onResponse({ ok = response.ok ~= false, status = response.status or 200, body = response.body or "" })
+  end
+
   function host.commandExists(name)
     return commands[name] == true
   end

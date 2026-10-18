@@ -117,6 +117,7 @@ export type Settings = {
   unresolvedAbsence: "keep" | "remove",
   idleBackend: IdleBackend,
   window: { start: string, ["end"]: string, excludeHolidays: boolean, extraRules: { string } },
+  holidays: { enabled: boolean, country: string, region: string }, -- spec §8.4, codes upper-cased
 }
 
 -- Holidays and days off, used by the window (lib/rules.luau).
@@ -164,7 +165,7 @@ export type SnapshotAutomation = {
   preset: Preset,
   idleMin: number,
   window: { start: string, ["end"]: string, extraRules: number },
-  backends: { idle: BackendHealth, logind: BackendHealth },
+  backends: { idle: BackendHealth, logind: BackendHealth, holidays: BackendHealth },
   ruleErrors: { RuleError },
   preview: { string }, -- this week, see Rules.preview
   hints: { string }, -- one-time hints to show ("swayidle")
@@ -259,6 +260,7 @@ export type Host = {
   togglePanel: (panelId: string) -> (),
   runStream: (cmd: string, onLine: (line: string) -> ()) -> boolean,
   runAsync: (argv: { string }, onResult: ((result: CommandResult) -> ())?, timeoutMs: number?) -> boolean,
+  http: (req: HttpRequest, onResponse: (response: HttpResponse) -> ()) -> boolean,
   commandExists: (name: string) -> boolean,
   getenv: (name: string) -> string?,
   log: (message: string) -> (),
@@ -266,6 +268,19 @@ export type Host = {
   tr: (key: string, subst: { [string]: any }?) -> string,
   trp: (key: string, count: number, subst: { [string]: any }?) -> string,
 }
+
+export type HttpRequest = {
+  url: string,
+  method: string?,
+  headers: { string }?,
+  body: string?,
+  basic_username: string?,
+  basic_password: string?,
+  follow_redirects: boolean?,
+  allow_insecure_tls: boolean?,
+}
+
+export type HttpResponse = { ok: boolean, status: number, body: string }
 
 export type CommandResult = { exitCode: number, stdout: string, stderr: string, timedOut: boolean }
 

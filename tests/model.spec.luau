@@ -39,6 +39,7 @@ t.describe("model.settings", function()
       unresolvedAbsence = "keep",
       idleBackend = "auto",
       window = { start = "08:00", ["end"] = "19:00", excludeHolidays = true, extraRules = {} },
+      holidays = { enabled = true, country = "", region = "" },
     })
   end)
 

@@ -63,4 +63,13 @@ t.describe("time.workdays", function()
   end)
 end)
 
+t.describe("time.input", function()
+  t.it("checks calendar dates", function()
+    t.expect(Time.isDate("2026-02-28")).toBe(true)
+    t.expect(Time.isDate("2026-02-30")).toBe(false)
+    t.expect(Time.isDate("2026-2-3")).toBe(false)
+    t.expect(Time.isDate(42)).toBe(false)
+  end)
+end)
+
 t.finish()

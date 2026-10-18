@@ -115,7 +115,8 @@
       "minutes": {
         "one": "{count} min",
         "other": "{count} min"
-      }
+      },
+      "holidays": "Public holidays are unavailable: set your country in the settings, or check your connection."
     },
     "automation": {
       "preset": {
@@ -302,6 +303,18 @@
       "swayidle": "swayidle",
       "external": "External (IPC)",
       "off": "Off"
+    },
+    "holidays_enabled": {
+      "label": "Public holidays",
+      "description": "No target on public holidays, and no automatic check-in. Fetched from date.nager.at, the plugin's only network access."
+    },
+    "holiday_country": {
+      "label": "Holiday country",
+      "description": "Two-letter country code, such as FR or DE. Empty: from your locale."
+    },
+    "holiday_region": {
+      "label": "Holiday region",
+      "description": "Optional subdivision code for regional holidays, such as FR-67 or DE-BY."
     }
   },
   "errors": {
