@@ -19,6 +19,11 @@ local Time = require("./lib/time.luau")
 local Types = require("./lib/types.luau")
 
 local SNAPSHOT_KEY = "shift.snapshot"
+local BALANCE_KEY = "shift.balance"
+local HISTORY_KEY = "shift.history"
+-- Longest range a history request may cover: a month view with its leading and
+-- trailing days.
+local MAX_HISTORY_DAYS = 42
 local TICK_MS = 5000
 local HEARTBEAT_S = 60
 -- A tick later than this means the clock jumped or the system slept (spec §6.3.2).
@@ -32,7 +37,6 @@ local host = Host.new()
 local store = Store.new(host)
 local settings = Model.readSettings(host.getConfig)
 local state: Types.State = store:loadState()
-local balance: Types.Balance? = store:loadBalance()
 local lastSaveS = 0
 local lastPublishMinute: number? = nil
 
@@ -42,7 +46,22 @@ end
 
 local lastTickS = nowS()
 
--- Automation window ---------------------------------------------------------------
+local function today(): string
+  return Time.workdayOf(nowS(), settings.dayStartHour)
+end
+
+-- On first run, tracking starts today (spec §6.10).
+local loadedBalance = store:loadBalance()
+local balance: Types.Balance = loadedBalance
+  or { schema = Store.SCHEMA, trackingStart = today(), initialBalanceMin = 0, adjustments = {} }
+if not loadedBalance then
+  store:saveBalance(balance)
+end
+
+-- Recorded day, nil when nothing was recorded.
+local function dayOf(dateKey: string): Types.Day?
+  return store:day(dateKey)
+end
 
 local holidays: Holidays.Monitor? = nil
 
@@ -50,13 +69,17 @@ local function holidayOf(dateKey: string): string?
   return holidays and holidays.holiday(dateKey)
 end
 
--- Days off are not tracked yet.
+-- What targets and the balance read; `balance` is replaced on every change.
+local book: Types.Book = { balance = balance, dayOf = dayOf, holiday = holidayOf }
+
+-- Automation window ---------------------------------------------------------------
+
 local calendar: Types.Calendar = {
   isHoliday = function(dateKey)
     return holidayOf(dateKey) ~= nil
   end,
-  isDayOff = function(_dateKey)
-    return false
+  isDayOff = function(dateKey)
+    return Model.hasFlag(dayOf(dateKey), "dayOff")
   end,
 }
 local rules: Rules.Compiled
@@ -123,9 +146,53 @@ local function automationInfo(now: number): Types.SnapshotAutomation
   }
 end
 
--- Recorded day, nil when nothing was recorded.
-local function dayOf(dateKey: string): Types.Day?
-  return store:day(dateKey)
+-- History and balance ----------------------------------------------------------------
+
+-- The settled balance only changes with the data or the day: it is computed again after
+-- a change (`invalidate`), and the balance and history keys are published with it.
+local summary: Types.BalanceSummary? = nil
+local summaryDay: string? = nil
+local historyRange: { from: string, to: string }? = nil
+
+local function invalidate()
+  summary = nil
+  preview = nil
+end
+
+local function publishHistory()
+  local range = historyRange
+  if not range then
+    return
+  end
+  local current, day, days = today(), range.from, {}
+  while day <= range.to do
+    table.insert(days, Model.daySummary(day, book, current))
+    day = Time.addDays(day, 1)
+  end
+  local info: Types.HistoryInfo = { from = range.from, to = range.to, days = days }
+  host.state.set(HISTORY_KEY, info)
+end
+
+local function balanceSummary(): Types.BalanceSummary
+  local day = today()
+  if summary and summaryDay == day then
+    return summary
+  end
+  local computed = Model.balance(book, day)
+  summary, summaryDay = computed, day
+  local info: Types.BalanceInfo = {
+    trackingStart = balance.trackingStart,
+    initialBalanceMin = balance.initialBalanceMin,
+    adjustments = balance.adjustments,
+    initialMs = computed.initialMs,
+    deltaMs = computed.deltaMs,
+    adjustmentsMs = computed.adjustmentsMs,
+    settledMs = computed.settledMs,
+    toReview = computed.toReview,
+  }
+  host.state.set(BALANCE_KEY, info)
+  publishHistory()
+  return computed
 end
 
 local function publish()
@@ -137,11 +204,39 @@ local function publish()
       state = state,
       nowS = now,
       settings = settings,
-      meta = balance,
-      dayOf = dayOf,
+      book = book,
+      balance = balanceSummary(),
       automation = automationInfo(now),
     })
   )
+end
+
+local function setBalance(next: Types.Balance)
+  balance = next
+  book.balance = next
+  store:saveBalance(next)
+  invalidate()
+end
+
+-- The contract in the settings applies from today on (D22).
+local function syncContract()
+  local history = Model.syncContract(balance.contractHistory, settings, today())
+  if history then
+    local next = table.clone(balance)
+    next.contractHistory = history
+    setBalance(next)
+  end
+end
+
+local function configureHolidays()
+  if holidays then
+    holidays.configure({
+      enabled = settings.holidays.enabled,
+      country = settings.holidays.country,
+      region = settings.holidays.region,
+      fromYear = Time.year(balance.trackingStart),
+    })
+  end
 end
 
 -- Effects ------------------------------------------------------------------------------
@@ -167,6 +262,9 @@ end
 
 local function apply(effects: { Types.Effect })
   for _, effect in effects do
+    if string.sub(effect.type, 1, 7) == "ledger." then
+      invalidate()
+    end
     if effect.type == "ledger.addSession" then
       addSession(effect.date, effect.session)
     elseif effect.type == "ledger.removeSession" then
@@ -178,6 +276,15 @@ local function apply(effects: { Types.Effect })
         day.flags = day.flags or {}
         day.flags[effect.flag] = effect.value
       end)
+    elseif effect.type == "ledger.setDay" then
+      store:setDay(effect.date, effect.day)
+      store:saveLedger(Time.year(effect.date))
+    elseif effect.type == "balance.save" then
+      local trackingStart = balance.trackingStart
+      setBalance(effect.balance)
+      if effect.balance.trackingStart ~= trackingStart then
+        configureHolidays()
+      end
     elseif effect.type == "state.save" then
       saveState()
     elseif effect.type == "publish" then
@@ -188,7 +295,7 @@ end
 
 local function dispatch(event: Types.Event): Types.Result
   local nextState, effects, result =
-    Automation.reduce(state, event, { nowS = nowS(), settings = settings, window = windowProbe, dayOf = dayOf })
+    Automation.reduce(state, event, { nowS = nowS(), settings = settings, window = windowProbe, dayOf = dayOf, balance = balance })
   state = nextState
   apply(effects)
   return result
@@ -235,32 +342,13 @@ end
 
 -- Startup ------------------------------------------------------------------------------
 
-if not balance then
-  balance = {
-    schema = Store.SCHEMA,
-    trackingStart = Time.workdayOf(nowS(), settings.dayStartHour),
-    initialBalanceMin = 0,
-    adjustments = {},
-  }
-  store:saveBalance(balance)
-end
+syncContract()
 
-local function configureHolidays()
-  if holidays then
-    holidays.configure({
-      enabled = settings.holidays.enabled,
-      country = settings.holidays.country,
-      region = settings.holidays.region,
-      fromYear = Time.year((balance :: Types.Balance).trackingStart),
-    })
-  end
-end
-
--- Holidays change the window: it is evaluated afresh, by the next tick, since a
--- configuration change can happen while effects are being applied.
+-- Holidays change targets and the window: both are evaluated afresh, by the next tick,
+-- since a configuration change can happen while effects are being applied.
 local calendarChanged = false
 holidays = Holidays.start(host, function()
-  preview = nil
+  invalidate()
   calendarChanged = true
 end)
 configureHolidays()
@@ -295,10 +383,44 @@ local UI_COMMANDS = {
   ["suggestion.dismiss"] = true,
   ["hint.dismiss"] = true,
   ["onboarding.dismiss"] = true,
+  ["day.save"] = true,
+  ["day.flag"] = true,
+  ["adjust.add"] = true,
+  ["adjust.remove"] = true,
+  ["balance.meta"] = true,
 }
-local COMMAND_FIELDS = { id = "string", keep = "boolean", kind = "string" }
+local COMMAND_FIELDS = {
+  id = "string",
+  keep = "boolean",
+  kind = "string",
+  date = "string",
+  sessions = "table",
+  openStartS = "number",
+  dayOff = "boolean",
+  flag = "string",
+  value = "boolean",
+  minutes = "number",
+  note = "string",
+  trackingStart = "string",
+  initialBalanceMin = "number",
+}
+
+-- The panel asks for the days it shows; they are published on `shift.history`, and again
+-- whenever the data changes.
+local function requestHistory(cmd): Types.Result
+  local from, to = cmd.from, cmd.to
+  if not Time.isDate(from) or not Time.isDate(to) or to < from or Time.daysBetween(from, to) >= MAX_HISTORY_DAYS then
+    return { ok = false, error = "invalid_range" }
+  end
+  historyRange = { from = from, to = to }
+  publishHistory()
+  return { ok = true, changed = false }
+end
 
 Commands.receiver(host, function(cmd)
+  if cmd.type == "history.get" then
+    return requestHistory(cmd)
+  end
   if not UI_COMMANDS[cmd.type] then
     return { ok = false, error = "unknown_command" }
   end
@@ -354,7 +476,9 @@ function onConfigChanged()
   local old = settings
   settings = Model.readSettings(host.getConfig)
   compileRules()
+  syncContract()
   configureHolidays()
+  invalidate()
   -- Restart only what the change concerns (spec §8).
   local restarted = false
   if Model.usesSignals(settings) ~= Model.usesSignals(old) then
@@ -373,6 +497,26 @@ end
 local IPC_EVENTS = { checkin = true, checkout = true, toggle = true, undo = true }
 local IPC_SIGNALS = { idle = true, active = true, lock = true, unlock = true, sleep = true, resume = true }
 
+-- `adjust <±duration> [note…]`, dated today.
+local function ipcAdjust(arg: string): Types.Result
+  local amount, note = string.match(arg, "^(%S+)%s*(.*)$")
+  local minutes = amount and Time.parseDuration(amount)
+  if not minutes or minutes == 0 then
+    return { ok = false, error = "invalid_adjustment" }
+  end
+  local id = string.format("j_%x%04x", host.nowMs(), math.random(0, 0xffff)) -- as the panel
+  return dispatch({ type = "adjust.add", id = id, date = today(), minutes = minutes, note = note })
+end
+
+-- `dayoff [YYYY-MM-DD]` toggles the marker, today by default.
+local function ipcDayOff(arg: string): Types.Result
+  local date = arg ~= "" and arg or today()
+  if not Time.isDate(date) then
+    return { ok = false, error = "invalid_flag" }
+  end
+  return dispatch({ type = "day.flag", date = date, flag = "dayOff", value = not calendar.isDayOff(date) })
+end
+
 local function trim(payload: any): string
   return type(payload) == "string" and (string.match(payload, "^%s*(.-)%s*$") :: string) or ""
 end
@@ -389,6 +533,10 @@ function onIpc(event, payload)
     else
       result = dispatch({ type = "absence.resolve", id = oldest.id, keep = arg == "keep" })
     end
+  elseif event == "adjust" then
+    result = ipcAdjust(arg)
+  elseif event == "dayoff" then
+    result = ipcDayOff(arg)
   elseif event == "holidays-refresh" then
     if holidays then
       holidays.refresh()

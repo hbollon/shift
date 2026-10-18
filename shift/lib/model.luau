@@ -7,7 +7,12 @@ local Types = require("./types.luau")
 
 type AbsenceAction = Types.AbsenceAction
 type AwaySignal = Types.AwaySignal
+type Balance = Types.Balance
+type BalanceSummary = Types.BalanceSummary
+type Book = Types.Book
+type Contract = Types.Contract
 type Day = Types.Day
+type DaySummary = Types.DaySummary
 type Live = Types.Live
 type Status = Types.Status
 type Session = Types.Session
@@ -163,15 +168,187 @@ function Model.dailyTargetMs(settings: Settings): number
   return math.round(settings.weeklyHours * HOUR_MS / count / MINUTE_MS) * MINUTE_MS
 end
 
--- Target of a workday (spec §6.6). `meta.trackingStart` is the first tracked day.
-function Model.targetMs(dateKey: string, settings: Settings, meta: { trackingStart: string? }): number
-  if meta.trackingStart and dateKey < meta.trackingStart then
+-- Contract (D22): changes apply from the day they are made, never to past days.
+function Model.contract(settings: Settings, from: string): Contract
+  local daily = Model.dailyTargetMs(settings) // MINUTE_MS
+  local targets = {}
+  for day = 1, 7 do
+    targets[day] = settings.workdays[day] and daily or 0
+  end
+  return { from = from, weeklyHours = settings.weeklyHours, targets = targets }
+end
+
+local function sameContract(a: Contract, b: Contract): boolean
+  if a.weeklyHours ~= b.weeklyHours then
+    return false
+  end
+  for day = 1, 7 do
+    if a.targets[day] ~= b.targets[day] then
+      return false
+    end
+  end
+  return true
+end
+
+-- The contract history with the current settings applied from `today`, or nil when it
+-- already ends with them. A change made the same day as the previous one replaces it.
+function Model.syncContract(history: { Contract }?, settings: Settings, today: string): { Contract }?
+  local list = table.clone(history or {})
+  local current = Model.contract(settings, today)
+  local last = list[#list]
+  if last and sameContract(last, current) then
+    return nil
+  end
+  if last and last.from >= today then
+    list[#list] = nil
+    local previous = list[#list]
+    if not previous then
+      current.from = last.from -- the first contract keeps applying from tracking start
+    elseif sameContract(previous, current) then
+      return list -- back to what applied before today
+    end
+  end
+  table.insert(list, current)
+  return list
+end
+
+-- The contract in force on a date; the oldest one for earlier dates.
+function Model.contractOn(history: { Contract }?, dateKey: string): Contract?
+  local found = history and history[1]
+  for _, entry in history or ({} :: { Contract }) do
+    if entry.from <= dateKey then
+      found = entry
+    end
+  end
+  return found
+end
+
+-- Whether a recorded day has a flag (`dayOff`, `missingConfirmed`, `needsReview`).
+function Model.hasFlag(day: Day?, name: string): boolean
+  return day ~= nil and day.flags ~= nil and day.flags[name] == true
+end
+local flag = Model.hasFlag
+
+-- Target of a workday (spec §6.6): none before tracking start, outside the contract
+-- workdays, on public holidays and on days off.
+function Model.targetMs(dateKey: string, book: Book): number
+  local balance = book.balance
+  if dateKey < balance.trackingStart then
     return 0
   end
-  if not settings.workdays[Time.weekday(dateKey)] then
+  local contract = Model.contractOn(balance.contractHistory, dateKey)
+  local minutes = contract and contract.targets[Time.weekday(dateKey)] or 0
+  if minutes == 0 or book.holiday(dateKey) or flag(book.dayOf(dateKey), "dayOff") then
     return 0
   end
-  return Model.dailyTargetMs(settings)
+  return minutes * MINUTE_MS
+end
+
+-- Whether a date is a workday of the contract in force then.
+function Model.isContractDay(dateKey: string, balance: Balance): boolean
+  local contract = Model.contractOn(balance.contractHistory, dateKey)
+  return contract ~= nil and contract.targets[Time.weekday(dateKey)] > 0
+end
+
+-- History and balance -------------------------------------------------------------
+
+-- A day as the history and the day editor show it. A missing day is a past day with a
+-- target and no session that the user has not reviewed (D23).
+function Model.daySummary(dateKey: string, book: Book, today: string): DaySummary
+  local day = book.dayOf(dateKey)
+  local target = Model.targetMs(dateKey, book)
+  local sessions = day and day.sessions or {}
+  local confirmed = flag(day, "missingConfirmed")
+  return {
+    date = dateKey,
+    workedMs = Model.closedWorkedMs(day),
+    targetMs = target,
+    holiday = book.holiday(dateKey),
+    dayOff = flag(day, "dayOff"),
+    missing = dateKey < today and target > 0 and #sessions == 0 and not confirmed,
+    missingConfirmed = confirmed,
+    needsReview = flag(day, "needsReview"),
+    sessions = sessions,
+  }
+end
+
+-- The settled balance on `today` (spec §6.6): the initial balance, plus worked minus
+-- target for every day from tracking start to yesterday that is not an unreviewed
+-- missing day, plus every adjustment.
+function Model.balance(book: Book, today: string): BalanceSummary
+  local balance = book.balance
+  local delta, toReview, needsReview = 0, {}, {}
+  local date = balance.trackingStart
+  while date < today do
+    local summary = Model.daySummary(date, book, today)
+    if summary.missing then
+      table.insert(toReview, date)
+    else
+      delta += summary.workedMs - summary.targetMs
+    end
+    if summary.needsReview then
+      table.insert(needsReview, date)
+    end
+    date = Time.addDays(date, 1)
+  end
+  local adjustments = 0
+  for _, adjustment in balance.adjustments do
+    adjustments += adjustment.minutes * MINUTE_MS
+  end
+  local initial = balance.initialBalanceMin * MINUTE_MS
+  return {
+    settledMs = initial + delta + adjustments,
+    initialMs = initial,
+    deltaMs = delta,
+    adjustmentsMs = adjustments,
+    toReview = toReview,
+    needsReview = needsReview,
+  }
+end
+
+-- Day editor (spec §6.8.2, §6.8.3) --------------------------------------------------
+
+export type DayDraft = {
+  date: string,
+  sessions: { { startS: number, endS: number } },
+  openStartS: number?, -- the running session's start, when it belongs to this day
+}
+
+-- Checks the sessions of an edited day. Returns nil when valid, else the index of the
+-- first faulty session (0 for the running one) and a reason: "order" (end ≤ start),
+-- "bounds" (outside the workday), "future" (after now), or "overlap".
+function Model.validateDay(draft: DayDraft, dayStartHour: number, nowS: number): (number?, string?)
+  local fromS = Time.workdayStartS(draft.date, dayStartHour)
+  local toS = Time.workdayStartS(Time.addDays(draft.date, 1), dayStartHour)
+  local ranges = {}
+  for index, session in draft.sessions do
+    if session.endS <= session.startS then
+      return index, "order"
+    elseif session.startS < fromS or session.endS > toS then
+      return index, "bounds"
+    elseif session.endS > nowS then
+      return index, "future"
+    end
+    table.insert(ranges, { index = index, startS = session.startS, endS = session.endS })
+  end
+  local open = draft.openStartS
+  if open then
+    if open < fromS or open >= toS then
+      return 0, "bounds"
+    elseif open > nowS then
+      return 0, "future"
+    end
+    table.insert(ranges, { index = 0, startS = open, endS = math.huge })
+  end
+  table.sort(ranges, function(a, b)
+    return a.startS < b.startS
+  end)
+  for i = 2, #ranges do
+    if ranges[i].startS < ranges[i - 1].endS then
+      return math.max(ranges[i].index, ranges[i - 1].index), "overlap"
+    end
+  end
+  return nil
 end
 
 -- Sessions -------------------------------------------------------------------
@@ -298,6 +475,18 @@ function Model.undoable(state: State, nowS: number): UndoEntry?
   return nil
 end
 
+-- What an undo would revert, for the UIs' labels: the action, refined for flags and
+-- adjustments ("day_off", "adjust_remove"…).
+local function undoKind(entry: UndoEntry): string
+  if entry.action == "flag" then
+    local name = entry.flag == "dayOff" and "day_off" or "not_worked"
+    return entry.before and name .. "_cleared" or name
+  elseif entry.action == "adjust" then
+    return entry.added and "adjust_add" or "adjust_remove"
+  end
+  return entry.action
+end
+
 -- Snapshot -------------------------------------------------------------------
 
 -- Builds the `shift.snapshot` value (spec §9.3). Counters cover closed sessions only:
@@ -308,15 +497,15 @@ export type SnapshotContext = {
   state: State,
   nowS: number,
   settings: Settings,
-  meta: { trackingStart: string? },
-  dayOf: (dateKey: string) -> Day?, -- recorded day, nil when nothing was recorded
+  book: Book,
+  balance: BalanceSummary, -- Model.balance(book, today), cached by the service
   automation: Types.SnapshotAutomation,
 }
 
 function Model.snapshot(ctx: SnapshotContext): Snapshot
-  local settings, meta, open = ctx.settings, ctx.meta, ctx.state.open
+  local settings, book, open = ctx.settings, ctx.book, ctx.state.open
   local today = Time.workdayOf(ctx.nowS, settings.dayStartHour)
-  local todayRecord = ctx.dayOf(today)
+  local todayRecord = book.dayOf(today)
 
   local status = Model.status(ctx.state, settings)
   local since
@@ -337,8 +526,8 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
   local weekWorked, weekTarget = 0, 0
   for offset = 0, 6 do
     local key = Time.addDays(weekStart, offset)
-    weekWorked += Model.closedWorkedMs(ctx.dayOf(key))
-    weekTarget += Model.targetMs(key, settings, meta)
+    weekWorked += Model.closedWorkedMs(book.dayOf(key))
+    weekTarget += Model.targetMs(key, book)
   end
 
   local sessions = {}
@@ -370,22 +559,26 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
       date = today,
       workedClosedMs = Model.closedWorkedMs(todayRecord),
       openStartMs = openStartS and openStartS * 1000 or nil,
-      targetMs = Model.targetMs(today, settings, meta),
-      isWorkday = settings.workdays[Time.weekday(today)] == true,
+      targetMs = Model.targetMs(today, book),
+      isWorkday = Model.isContractDay(today, book.balance),
+      holiday = book.holiday(today),
+      dayOff = flag(todayRecord, "dayOff"),
       sessions = sessions,
       absences = absences,
     },
     week = { workedMs = weekWorked, targetMs = weekTarget },
+    balance = { settledMs = ctx.balance.settledMs, toReview = ctx.balance.toReview },
     pending = pending,
     suggestion = suggestion and suggestion.kind or nil,
-    undo = undo and { id = undo.id, action = undo.action, atS = undo.atS } or nil,
+    undo = undo and { id = undo.id, action = undo.action, kind = undoKind(undo), atS = undo.atS, date = (undo :: any).date } or nil,
     automation = ctx.automation,
     contract = {
       weeklyHours = settings.weeklyHours,
       workdays = settings.workdays,
       dailyTargetMs = Model.dailyTargetMs(settings),
+      dayStartHour = settings.dayStartHour,
     },
-    flags = { firstRun = not ctx.state.firstRunDismissed },
+    flags = { firstRun = not ctx.state.firstRunDismissed, needsReview = ctx.balance.needsReview },
     display = { durationFormat = settings.durationFormat },
   }
 end

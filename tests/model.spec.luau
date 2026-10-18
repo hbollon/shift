@@ -13,6 +13,27 @@ end
 
 local DEFAULTS = settingsFrom({})
 
+-- A book over `days` with the default contract from `trackingStart`.
+local function bookOf(days, options)
+  options = options or {}
+  local trackingStart = options.trackingStart or "2026-10-01"
+  return {
+    balance = {
+      schema = 1,
+      trackingStart = trackingStart,
+      initialBalanceMin = options.initialMin or 0,
+      adjustments = options.adjustments or {},
+      contractHistory = options.history or { Model.contract(DEFAULTS, trackingStart) },
+    },
+    dayOf = function(key)
+      return days[key]
+    end,
+    holiday = function(key)
+      return (options.holidays or {})[key]
+    end,
+  }
+end
+
 local function at(day, hour, min)
   local year, month, d = Time.parseDate(day)
   return Time.localToEpoch(year, month, d, hour, min or 0)
@@ -98,10 +119,156 @@ t.describe("model.targets", function()
   end)
 
   t.it("gives no target before tracking start or outside workdays", function()
-    local meta = { trackingStart = "2026-10-07" }
-    t.expect(Model.targetMs("2026-10-06", DEFAULTS, meta)).toBe(0)
-    t.expect(Model.targetMs("2026-10-07", DEFAULTS, meta)).toBe(7 * H)
-    t.expect(Model.targetMs("2026-10-10", DEFAULTS, meta)).toBe(0) -- Saturday
+    local book = bookOf({}, { trackingStart = "2026-10-07" })
+    t.expect(Model.targetMs("2026-10-06", book)).toBe(0)
+    t.expect(Model.targetMs("2026-10-07", book)).toBe(7 * H)
+    t.expect(Model.targetMs("2026-10-10", book)).toBe(0) -- Saturday
+  end)
+
+  t.it("gives no target on public holidays and days off", function()
+    local off = Model.newDay()
+    off.flags.dayOff = true
+    local book = bookOf({ ["2026-10-08"] = off }, { holidays = { ["2026-10-07"] = "Fête" } })
+    t.expect(Model.targetMs("2026-10-06", book)).toBe(7 * H)
+    t.expect(Model.targetMs("2026-10-07", book)).toBe(0)
+    t.expect(Model.targetMs("2026-10-08", book)).toBe(0)
+  end)
+end)
+
+t.describe("model.contract", function()
+  local FOUR_DAYS = settingsFrom({ weekly_hours = 32, work_week = "custom", workday_fri = false })
+
+  t.it("stores daily target minutes per weekday", function()
+    t.expect(Model.contract(DEFAULTS, "2026-10-01")).toEqual({
+      from = "2026-10-01",
+      weeklyHours = 35,
+      targets = { 420, 420, 420, 420, 420, 0, 0 },
+    })
+  end)
+
+  t.it("applies a change from the day it is made, never to past days", function()
+    local history = { Model.contract(DEFAULTS, "2026-10-01") }
+    t.expect(Model.syncContract(history, DEFAULTS, "2026-10-09")).toBeNil()
+    local changed = Model.syncContract(history, FOUR_DAYS, "2026-10-12") :: any
+    t.expect(#changed).toBe(2)
+    t.expect(changed[2].from).toBe("2026-10-12")
+    local book = bookOf({}, { history = changed })
+    t.expect(Model.targetMs("2026-10-09", book)).toBe(7 * H) -- Friday, old contract
+    t.expect(Model.targetMs("2026-10-16", book)).toBe(0) -- Friday, new contract
+    t.expect(Model.targetMs("2026-10-13", book)).toBe(8 * H)
+    t.expect(Model.isContractDay("2026-10-16", book.balance)).toBe(false)
+  end)
+
+  t.it("replaces a change made the same day, and drops one undone that day", function()
+    local history = { Model.contract(DEFAULTS, "2026-10-01") }
+    local changed = Model.syncContract(history, FOUR_DAYS, "2026-10-12") :: any
+    local again = Model.syncContract(changed, settingsFrom({ weekly_hours = 30 }), "2026-10-12") :: any
+    t.expect(#again).toBe(2)
+    t.expect(again[2].weeklyHours).toBe(30)
+    t.expect(Model.syncContract(again, DEFAULTS, "2026-10-12")).toEqual(history)
+  end)
+
+  t.it("starts the history with the first contract", function()
+    t.expect(Model.syncContract(nil, DEFAULTS, "2026-10-01")).toEqual({ Model.contract(DEFAULTS, "2026-10-01") })
+    -- A change on the first day keeps applying from tracking start.
+    local first = { Model.contract(DEFAULTS, "2026-10-01") }
+    t.expect((Model.syncContract(first, FOUR_DAYS, "2026-10-01") :: any)[1].from).toBe("2026-10-01")
+  end)
+end)
+
+-- Hand-computed fixture (exit criterion of the history and balance work): tracking from
+-- Thu 2026-10-01, 35 h over Mon–Fri (7:00/day), today Fri 2026-10-09.
+t.describe("model.balance", function()
+  local function day(sessions, flags)
+    local record = Model.newDay()
+    for _, range in sessions do
+      Model.addSession(record, session(range[1], range[2], range[3], range[4], range[5]))
+    end
+    for name, value in flags or {} do
+      record.flags[name] = value
+    end
+    return record
+  end
+
+  local days = {
+    ["2026-10-01"] = day({ { "2026-10-01", 9, 0, 17, 30 } }), -- Thu: 8:30 → +1:30
+    ["2026-10-02"] = day({}, { dayOff = true }), -- Fri: day off → 0
+    -- Sat 3, Sun 4: no target. Sun has 1:00 of work → +1:00
+    ["2026-10-04"] = day({ { "2026-10-04", 10, 0, 11, 0 } }),
+    -- Mon 5: holiday → 0
+    ["2026-10-06"] = day({ { "2026-10-06", 9, 0, 12, 0 }, { "2026-10-06", 13, 0, 16, 0 } }), -- Tue: 6:00 → −1:00
+    -- Wed 7: missing, unreviewed → left out
+    ["2026-10-08"] = day({}, { missingConfirmed = true }), -- Thu: confirmed not worked → −7:00
+    ["2026-10-09"] = day({ { "2026-10-09", 8, 0, 12, 0 } }), -- Fri: today, excluded
+  }
+  local book = bookOf(days, {
+    holidays = { ["2026-10-05"] = "Holiday" },
+    initialMin = 90, -- +1:30
+    adjustments = { { id = "j_1", date = "2026-10-06", minutes = -120, note = "Dentist" } }, -- −2:00
+  })
+
+  t.it("matches the hand-computed balance", function()
+    local summary = Model.balance(book, "2026-10-09")
+    -- +1:30 + 1:00 − 1:00 − 7:00 = −5:30
+    t.expect(summary.deltaMs).toBe(-(5 * H + 30 * M))
+    t.expect(summary.initialMs).toBe(90 * M)
+    t.expect(summary.adjustmentsMs).toBe(-120 * M)
+    -- −5:30 + 1:30 − 2:00 = −6:00
+    t.expect(summary.settledMs).toBe(-6 * H)
+    t.expect(summary.toReview).toEqual({ "2026-10-07" })
+  end)
+
+  t.it("counts a missing day once it is reviewed", function()
+    local reviewed = table.clone(days)
+    reviewed["2026-10-07"] = day({}, { missingConfirmed = true })
+    local summary = Model.balance(bookOf(reviewed, { holidays = { ["2026-10-05"] = "Holiday" } }), "2026-10-09")
+    t.expect(summary.toReview).toEqual({})
+    t.expect(summary.deltaMs).toBe(-(12 * H + 30 * M)) -- −5:30 − 7:00
+  end)
+
+  t.it("summarises a day for the history", function()
+    local summary = Model.daySummary("2026-10-07", book, "2026-10-09")
+    t.expect(summary.missing).toBe(true)
+    t.expect(summary.targetMs).toBe(7 * H)
+    t.expect(Model.daySummary("2026-10-05", book, "2026-10-09").holiday).toBe("Holiday")
+    t.expect(Model.daySummary("2026-10-02", book, "2026-10-09").dayOff).toBe(true)
+    t.expect(Model.daySummary("2026-10-09", book, "2026-10-09").missing).toBe(false)
+    t.expect(Model.daySummary("2026-10-12", book, "2026-10-09").missing).toBe(false) -- future
+  end)
+
+  t.it("lists days closed by the rollover", function()
+    local flagged = table.clone(days)
+    flagged["2026-10-06"] = day({ { "2026-10-06", 9, 0, 12, 0 } }, { needsReview = true })
+    t.expect(Model.balance(bookOf(flagged, {}), "2026-10-09").needsReview).toEqual({ "2026-10-06" })
+  end)
+end)
+
+t.describe("model.validateDay", function()
+  local NOW = at("2026-10-09", 15)
+  local function check(date, ranges, openStartS)
+    local sessions = {}
+    for _, range in ranges do
+      table.insert(sessions, { startS = range[1], endS = range[2] })
+    end
+    return { Model.validateDay({ date = date, sessions = sessions, openStartS = openStartS }, 4, NOW) }
+  end
+
+  t.it("accepts sessions inside the workday, night sessions included", function()
+    t.expect(check("2026-10-08", { { at("2026-10-08", 9), at("2026-10-08", 12) }, { at("2026-10-08", 22), at("2026-10-09", 2) } })).toEqual({})
+  end)
+
+  t.it("rejects reversed, out-of-bounds, future and overlapping sessions", function()
+    t.expect(check("2026-10-08", { { at("2026-10-08", 12), at("2026-10-08", 12) } })).toEqual({ 1, "order" })
+    t.expect(check("2026-10-08", { { at("2026-10-08", 3), at("2026-10-08", 5) } })).toEqual({ 1, "bounds" })
+    t.expect(check("2026-10-08", { { at("2026-10-09", 3), at("2026-10-09", 5) } })).toEqual({ 1, "bounds" })
+    t.expect(check("2026-10-09", { { at("2026-10-09", 14), at("2026-10-09", 16) } })).toEqual({ 1, "future" })
+    t.expect(check("2026-10-08", { { at("2026-10-08", 9), at("2026-10-08", 12) }, { at("2026-10-08", 11), at("2026-10-08", 13) } })).toEqual({ 2, "overlap" })
+  end)
+
+  t.it("checks the running session against the closed ones", function()
+    t.expect(check("2026-10-09", { { at("2026-10-09", 9), at("2026-10-09", 12) } }, at("2026-10-09", 13))).toEqual({})
+    t.expect(check("2026-10-09", { { at("2026-10-09", 9), at("2026-10-09", 12) } }, at("2026-10-09", 11))).toEqual({ 1, "overlap" })
+    t.expect(check("2026-10-09", {}, at("2026-10-09", 16))).toEqual({ 0, "future" })
   end)
 end)
 
@@ -138,14 +305,13 @@ end)
 
 t.describe("model.snapshot", function()
   local function snapshotAt(nowS, state, days)
+    local book = bookOf(days)
     return Model.snapshot({
       state = state,
       nowS = nowS,
       settings = DEFAULTS,
-      meta = { trackingStart = "2026-10-01" },
-      dayOf = function(key)
-        return days[key]
-      end,
+      book = book,
+      balance = Model.balance(book, Time.workdayOf(nowS, 4)),
       automation = {} :: any,
     })
   end
@@ -159,6 +325,7 @@ t.describe("model.snapshot", function()
       workedClosedMs = 0,
       targetMs = 7 * H,
       isWorkday = true,
+      dayOff = false,
       sessions = {},
       absences = {},
     })
@@ -167,7 +334,12 @@ t.describe("model.snapshot", function()
     t.expect(snap.week).toEqual({ workedMs = 0, targetMs = 35 * H })
     t.expect(snap.display).toEqual({ durationFormat = "colon" })
     t.expect(snap.contract.dailyTargetMs).toBe(7 * H)
-    t.expect(snap.flags).toEqual({ firstRun = true })
+    t.expect(snap.flags).toEqual({ firstRun = true, needsReview = {} })
+    -- Oct 1, 2, 5–8 have no session: unreviewed missing days.
+    t.expect(snap.balance).toEqual({
+      settledMs = 0,
+      toReview = { "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08" },
+    })
     t.expect(snap.undo).toBeNil()
   end)
 
@@ -188,7 +360,7 @@ t.describe("model.snapshot", function()
   t.it("publishes the action an undo would revert", function()
     local state = { open = nil, firstRunDismissed = true, undo = { { id = "checkout:s_1", action = "checkout", atS = at("2026-10-09", 14, 55) } } }
     local snap = snapshotAt(at("2026-10-09", 15), state, {})
-    t.expect(snap.undo).toEqual({ id = "checkout:s_1", action = "checkout", atS = at("2026-10-09", 14, 55) })
+    t.expect(snap.undo).toEqual({ id = "checkout:s_1", action = "checkout", kind = "checkout", atS = at("2026-10-09", 14, 55) })
     t.expect(snap.flags.firstRun).toBe(false)
     t.expect(snapshotAt(at("2026-10-09", 16), state, {}).undo).toBeNil()
   end)

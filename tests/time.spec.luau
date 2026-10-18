@@ -64,6 +64,60 @@ t.describe("time.workdays", function()
 end)
 
 t.describe("time.input", function()
+  t.it("parses typed clock times", function()
+    for text, minutes in {
+      ["9"] = 540,
+      ["09"] = 540,
+      ["930"] = 570,
+      ["0930"] = 570,
+      ["9:30"] = 570,
+      ["9h30"] = 570,
+      ["9H30"] = 570,
+      ["9.5"] = 570,
+      ["21:15"] = 1275,
+      ["9:15pm"] = 1275,
+      ["9:15 PM"] = 1275,
+      ["12am"] = 0,
+      ["12:30pm"] = 750,
+      [" 0:00 "] = 0,
+    } do
+      t.expect(Time.parseClock(text)).toBe(minutes)
+    end
+  end)
+
+  t.it("rejects invalid clock times", function()
+    for _, text in { "", "24:00", "9:60", "13pm", "0am", "9m", "abc", "12345", "9:5" } do
+      t.expect(Time.parseClock(text)).toBeNil()
+    end
+  end)
+
+  t.it("parses typed durations", function()
+    for text, minutes in {
+      ["2"] = 120,
+      ["2:30"] = 150,
+      ["2h30"] = 150,
+      ["2h 30m"] = 150,
+      ["2h"] = 120,
+      ["45m"] = 45,
+      ["45 min"] = 45,
+      ["-1:15"] = -75,
+      ["−1:15"] = -75,
+      ["+0:45"] = 45,
+      ["1.5"] = 90,
+      ["1,25"] = 75,
+    } do
+      t.expect(Time.parseDuration(text)).toBe(minutes)
+    end
+    for _, text in { "", "-", "2:75", "abc", "1:2:3" } do
+      t.expect(Time.parseDuration(text)).toBeNil()
+    end
+  end)
+
+  t.it("places workday clock times, night ones on the next calendar day", function()
+    t.expect(Time.workdayClockS("2026-10-09", 9 * 60, 4)).toBe(Time.localToEpoch(2026, 10, 9, 9, 0))
+    t.expect(Time.workdayClockS("2026-10-09", 2 * 60, 4)).toBe(Time.localToEpoch(2026, 10, 10, 2, 0))
+  end)
+
   t.it("checks calendar dates", function()
     t.expect(Time.isDate("2026-02-28")).toBe(true)
     t.expect(Time.isDate("2026-02-30")).toBe(false)

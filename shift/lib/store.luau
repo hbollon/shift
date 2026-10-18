@@ -162,6 +162,11 @@ function Store.day(self: Store, dateKey: string, create: (() -> Day)?): Day?
   return days[dateKey]
 end
 
+-- Replaces the record of a workday (unsaved until saveLedger).
+function Store.setDay(self: Store, dateKey: string, day: Day)
+  self:ledger(Time.year(dateKey)).days[dateKey] = day
+end
+
 function Store.saveLedger(self: Store, year: number): boolean
   return self:write(ledgerName(year), self:ledger(year))
 end

@@ -57,7 +57,15 @@
     "undo": {
       "checkin": "Undo check in at {time}",
       "checkout": "Undo check out at {time}",
-      "resolve": "Undo absence decision at {time}"
+      "resolve": "Undo absence decision at {time}",
+      "edit": "Undo changes to {date}",
+      "day_off": "Undo day off on {date}",
+      "day_off_cleared": "Undo removing the day off on {date}",
+      "not_worked": "Undo “not worked” on {date}",
+      "not_worked_cleared": "Undo reopening {date} for review",
+      "adjust_add": "Undo adjustment added at {time}",
+      "adjust_remove": "Undo adjustment deleted at {time}",
+      "meta": "Undo balance settings changed at {time}"
     },
     "welcome": {
       "title": "Welcome to Shift",

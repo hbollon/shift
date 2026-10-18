@@ -55,6 +55,11 @@ export type UndoEntry =
   { id: string, action: "checkin", atS: number, session: OpenSession }
   | { id: string, action: "checkout", atS: number, session: Session, date: string, recorded: boolean }
   | { id: string, action: "resolve", atS: number, absence: PendingAbsence, cut: Cut? }
+  -- A day saved from the day editor: the record and the open session before and after.
+  | { id: string, action: "edit", atS: number, date: string, before: Day?, after: Day, openBefore: OpenSession?, openAfter: OpenSession? }
+  | { id: string, action: "flag", atS: number, date: string, flag: string, before: boolean }
+  | { id: string, action: "adjust", atS: number, adjustment: Adjustment, added: boolean }
+  | { id: string, action: "meta", atS: number, before: BalanceMeta, after: BalanceMeta }
 
 -- What the signals currently say; nil fields are unknown (no backend, or not reported yet).
 export type Presence = { idle: boolean?, locked: boolean?, asleep: boolean? }
@@ -85,13 +90,69 @@ export type State = {
   firstRunDismissed: boolean?,
 }
 
+-- A manual balance correction (spec §6.6): partial time off, HR regularisation…
+export type Adjustment = { id: string, date: string, minutes: number, note: string }
+
+-- The contract from a day on (D22): daily target minutes per ISO weekday.
+export type Contract = { from: string, weeklyHours: number, targets: { number } }
+
+-- The balance settings the user edits in the Balance tab.
+export type BalanceMeta = { trackingStart: string, initialBalanceMin: number }
+
 -- balance.json
 export type Balance = {
   schema: number,
   trackingStart: string,
   initialBalanceMin: number,
-  adjustments: { any },
+  adjustments: { Adjustment },
+  contractHistory: { Contract }?, -- oldest first; filled by the service at startup
 }
+
+-- What targets and the balance read (Model.targetMs, Model.balance).
+export type Book = {
+  balance: Balance,
+  dayOf: (dateKey: string) -> Day?,
+  holiday: (dateKey: string) -> string?, -- name of the public holiday on that date
+}
+
+-- One day as the history and the day editor show it.
+export type DaySummary = {
+  date: string,
+  workedMs: number, -- recorded sessions
+  targetMs: number,
+  holiday: string?,
+  dayOff: boolean,
+  missing: boolean, -- unreviewed missing day (spec §6.6)
+  missingConfirmed: boolean,
+  needsReview: boolean,
+  sessions: { Session },
+}
+
+-- The settled balance (spec §6.6): today excluded, missing days left out until reviewed.
+export type BalanceSummary = {
+  settledMs: number,
+  initialMs: number,
+  deltaMs: number, -- Σ worked − target over the settled days
+  adjustmentsMs: number,
+  toReview: { string }, -- unreviewed missing days, oldest first
+  needsReview: { string }, -- days closed by the rollover, oldest first
+}
+
+-- `shift.balance` (spec §9.3): the balance settings and the settled balance, published
+-- by the service when the balance is computed again.
+export type BalanceInfo = {
+  trackingStart: string,
+  initialBalanceMin: number,
+  adjustments: { Adjustment },
+  initialMs: number,
+  deltaMs: number,
+  adjustmentsMs: number,
+  settledMs: number,
+  toReview: { string },
+}
+
+-- `shift.history` (spec §9.3): the days a panel asked for (`history.get`).
+export type HistoryInfo = { from: string, to: string, days: { DaySummary } }
 
 -- Settings (spec §8) ---------------------------------------------------------------
 
@@ -147,16 +208,20 @@ export type Snapshot = {
     openStartMs: number?, -- nil when off, or when the open session started on an earlier workday
     targetMs: number,
     isWorkday: boolean,
+    holiday: string?,
+    dayOff: boolean,
     sessions: { { startS: number, endS: number } }, -- closed sessions, in order
     absences: { { startS: number, endS: number } }, -- pending, in order
   },
   week: { workedMs: number, targetMs: number }, -- closed sessions; UIs add the open one
+  balance: { settledMs: number, toReview: { string } },
   pending: { { id: string, startS: number, endS: number, signal: AwaySignal } }, -- oldest first
   suggestion: "checkin" | "checkout" | nil,
-  undo: { id: string, action: "checkin" | "checkout" | "resolve", atS: number }?, -- nil once older than the undo window
+  -- nil once older than the undo window; `kind` names the label ("checkout", "day_off"…)
+  undo: { id: string, action: string, kind: string, atS: number, date: string? }?,
   automation: SnapshotAutomation,
-  contract: { weeklyHours: number, workdays: { boolean }, dailyTargetMs: number },
-  flags: { firstRun: boolean },
+  contract: { weeklyHours: number, workdays: { boolean }, dailyTargetMs: number, dayStartHour: number },
+  flags: { firstRun: boolean, needsReview: { string } },
   display: { durationFormat: DurationFormat },
 }
 
@@ -196,12 +261,25 @@ export type Event = {
   startS: number?,
   endS: number?,
   restarted: boolean?,
+  -- Edits of past days and of the balance (spec §6.8).
+  date: string?,
+  sessions: { { startS: number, endS: number } }?,
+  openStartS: number?,
+  dayOff: boolean?,
+  flag: string?,
+  value: boolean?,
+  minutes: number?,
+  note: string?,
+  trackingStart: string?,
+  initialBalanceMin: number?,
 }
 
 export type Effect =
   { type: "ledger.addSession", date: string, session: Session }
   | { type: "ledger.removeSession", date: string, id: string }
   | { type: "ledger.setFlag", date: string, flag: string, value: boolean }
+  | { type: "ledger.setDay", date: string, day: Day }
+  | { type: "balance.save", balance: Balance }
   | { type: "state.save" }
   | { type: "publish" }
 
@@ -218,6 +296,7 @@ export type ReduceContext = {
   settings: Settings,
   window: WindowProbe?,
   dayOf: ((dateKey: string) -> Day?)?, -- recorded days, read to cut removed absences out
+  balance: Balance?, -- balance.json, for the edits of the Balance tab
 }
 
 -- Commands (lib/commands.luau, spec §9.3) ---------------------------------------------

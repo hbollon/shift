@@ -209,13 +209,21 @@ local function scenario(config, state)
       return Rules.nextEdge(compiled, epochS, Rules.NO_CALENDAR)
     end,
   }
-  local sc = { state = state or { schema = 1 }, effects = {}, days = {} }
+  local sc = {
+    state = state or { schema = 1 },
+    effects = {},
+    days = {},
+    balance = { schema = 1, trackingStart = "2026-10-01", initialBalanceMin = 0, adjustments = {} },
+  }
   local function dayOf(date)
     return sc.days[date]
   end
   function sc.send(event, nowS)
-    local next, effects, result =
-      Automation.reduce(sc.state, event, { nowS = nowS, settings = settings, window = window, dayOf = dayOf })
+    local next, effects, result = Automation.reduce(
+      sc.state,
+      event,
+      { nowS = nowS, settings = settings, window = window, dayOf = dayOf, balance = sc.balance }
+    )
     sc.state = next
     for _, effect in effects do
       table.insert(sc.effects, effect)
@@ -224,6 +232,13 @@ local function scenario(config, state)
         t.expect((Model.addSession(sc.days[effect.date], effect.session))).toBe(true)
       elseif effect.type == "ledger.removeSession" then
         t.expect(Model.removeSession(sc.days[effect.date], effect.id)).toBe(true)
+      elseif effect.type == "ledger.setFlag" then
+        sc.days[effect.date] = sc.days[effect.date] or Model.newDay()
+        sc.days[effect.date].flags[effect.flag] = effect.value
+      elseif effect.type == "ledger.setDay" then
+        sc.days[effect.date] = effect.day
+      elseif effect.type == "balance.save" then
+        sc.balance = effect.balance
       end
     end
     return result
@@ -613,6 +628,139 @@ t.describe("automation.rollover", function()
     sc.send({ type = "tick" }, at(FRI, 23))
     t.expect(sc.state.workday).toBe(SAT)
     t.expect(sc.state.open).toBeTruthy()
+  end)
+end)
+
+t.describe("automation.edits", function()
+  local THU = "2026-10-08"
+
+  local function ranges(list)
+    local out = {}
+    for _, range in list do
+      table.insert(out, { startS = range[1], endS = range[2] })
+    end
+    return out
+  end
+
+  t.it("saves a past day, reviews it, and round-trips through undo", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(THU, 9))
+    sc.send({ type = "checkout" }, at(THU, 17))
+    sc.days[THU].flags.needsReview = true
+    local now = at(FRI, 10)
+    local edited = { { at(THU, 8, 30), at(THU, 12) }, { at(THU, 13), at(THU, 17, 15) } }
+    local result = sc.send({ type = "day.save", date = THU, sessions = ranges(edited) }, now)
+    t.expect(result).toEqual({ ok = true, changed = true })
+    t.expect(sc.sessions(THU)).toEqual(edited)
+    t.expect(sc.days[THU].flags.needsReview).toBeNil()
+    t.expect(sc.days[THU].sessions[1].origin).toBe("manual")
+    t.expect(sc.state.undo[#sc.state.undo].action).toBe("edit")
+
+    -- Delivered twice: the second save changes nothing.
+    t.expect(sc.send({ type = "day.save", date = THU, sessions = ranges(edited) }, now + 1).changed).toBe(false)
+
+    t.expect(sc.send({ type = "undo", id = sc.state.undo[#sc.state.undo].id }, now + 2).ok).toBe(true)
+    t.expect(sc.sessions(THU)).toEqual({ { at(THU, 9), at(THU, 17) } })
+    t.expect(sc.days[THU].flags.needsReview).toBe(true)
+  end)
+
+  t.it("keeps the origin of unchanged sessions", function()
+    local sc = scenario()
+    sc.days[THU] = Model.newDay()
+    Model.addSession(sc.days[THU], { id = Model.sessionId(at(THU, 9)), startS = at(THU, 9), endS = at(THU, 12), origin = "auto" })
+    sc.send({ type = "day.save", date = THU, sessions = ranges({ { at(THU, 9), at(THU, 12) }, { at(THU, 13), at(THU, 14) } }) }, at(FRI, 10))
+    t.expect(sc.days[THU].sessions[1].origin).toBe("auto")
+    t.expect(sc.days[THU].sessions[2].origin).toBe("manual")
+  end)
+
+  t.it("rejects invalid days and leaves the ledger alone", function()
+    local sc = scenario()
+    local result = sc.send({ type = "day.save", date = THU, sessions = ranges({ { at(THU, 12), at(THU, 11) } }) }, at(FRI, 10))
+    t.expect(result).toEqual({ ok = false, error = "invalid_order" })
+    t.expect(sc.send({ type = "day.save", date = "2026-02-30", sessions = {} }, at(FRI, 10)).error).toBe("invalid_day")
+    t.expect(#sc.effects).toBe(0)
+  end)
+
+  t.it("moves the start of the running session", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    local result = sc.send({ type = "day.save", date = FRI, sessions = {}, openStartS = at(FRI, 8, 30) }, at(FRI, 10))
+    t.expect(result.ok).toBe(true)
+    t.expect(sc.state.open).toEqual({ id = Model.sessionId(at(FRI, 8, 30)), startS = at(FRI, 8, 30), origin = "manual" })
+    sc.send({ type = "undo" }, at(FRI, 10, 1))
+    t.expect(sc.state.open.startS).toBe(at(FRI, 9))
+  end)
+
+  t.it("locks a day with pending absences", function()
+    local sc = scenario()
+    sc.send({ type = "checkin" }, at(FRI, 9))
+    sc.signal("lock", at(FRI, 10))
+    sc.signal("unlock", at(FRI, 11))
+    t.expect(#sc.state.pending).toBe(1)
+    t.expect(sc.send({ type = "day.save", date = FRI, sessions = {} }, at(FRI, 11, 5)).error).toBe("pending")
+  end)
+
+  t.it("marks days off and missing days, idempotently and undoably", function()
+    local sc = scenario()
+    t.expect(sc.send({ type = "day.flag", date = THU, flag = "dayOff", value = true }, at(FRI, 10)).changed).toBe(true)
+    t.expect(sc.days[THU].flags.dayOff).toBe(true)
+    t.expect(sc.send({ type = "day.flag", date = THU, flag = "dayOff", value = true }, at(FRI, 10)).changed).toBe(false)
+    sc.send({ type = "undo" }, at(FRI, 10, 1))
+    t.expect(sc.days[THU].flags.dayOff).toBe(false)
+    t.expect(sc.send({ type = "day.flag", date = THU, flag = "needsReview", value = true }, at(FRI, 10)).error).toBe("invalid_flag")
+    sc.send({ type = "day.flag", date = THU, flag = "missingConfirmed", value = true }, at(FRI, 10))
+    t.expect(sc.days[THU].flags.missingConfirmed).toBe(true)
+  end)
+
+  t.it("evaluates the window afresh when a day off changes today or ahead", function()
+    local sc = scenario()
+    sc.send({ type = "tick" }, at(FRI, 9))
+    t.expect(sc.state.window).toBeTruthy()
+    sc.send({ type = "day.flag", date = FRI, flag = "dayOff", value = true }, at(FRI, 9, 1))
+    t.expect(sc.state.window).toBeNil()
+    sc.send({ type = "tick" }, at(FRI, 9, 2))
+    -- Monday's edge was computed ahead: its window must be computed again, undo included.
+    sc.send({ type = "day.flag", date = "2026-10-12", flag = "dayOff", value = true }, at(FRI, 9, 3))
+    t.expect(sc.state.window).toBeNil()
+    sc.send({ type = "tick" }, at(FRI, 9, 4))
+    sc.send({ type = "undo" }, at(FRI, 9, 5))
+    t.expect(sc.state.window).toBeNil()
+    -- A past day changes no edge.
+    sc.send({ type = "tick" }, at(FRI, 9, 6))
+    sc.send({ type = "day.flag", date = THU, flag = "dayOff", value = true }, at(FRI, 9, 7))
+    t.expect(sc.state.window).toBeTruthy()
+    -- Nor does saving today without changing its marker; changing it does.
+    sc.send({ type = "day.save", date = FRI, sessions = {}, dayOff = true }, at(FRI, 9, 8))
+    t.expect(sc.state.window).toBeTruthy()
+    sc.send({ type = "day.save", date = FRI, sessions = {}, dayOff = false }, at(FRI, 9, 9))
+    t.expect(sc.state.window).toBeNil()
+  end)
+
+  t.it("adds and removes adjustments by id", function()
+    local sc = scenario()
+    local add = { type = "adjust.add", id = "j_1", date = FRI, minutes = -120, note = "  Dentist " }
+    t.expect(sc.send(add, at(FRI, 10)).changed).toBe(true)
+    t.expect(sc.balance.adjustments).toEqual({ { id = "j_1", date = FRI, minutes = -120, note = "Dentist" } })
+    t.expect(sc.send(add, at(FRI, 10)).changed).toBe(false)
+    sc.send({ type = "adjust.remove", id = "j_1" }, at(FRI, 10, 1))
+    t.expect(#sc.balance.adjustments).toBe(0)
+    -- An undo delivered twice reverts the removal only.
+    local id = sc.state.undo[#sc.state.undo].id
+    sc.send({ type = "undo", id = id }, at(FRI, 10, 2))
+    sc.send({ type = "undo", id = id }, at(FRI, 10, 2))
+    t.expect(#sc.balance.adjustments).toBe(1)
+    t.expect(sc.send({ type = "adjust.add", id = "j_2", date = FRI, minutes = 0 }, at(FRI, 10)).error).toBe("invalid_adjustment")
+  end)
+
+  t.it("edits tracking start and initial balance", function()
+    local sc = scenario()
+    sc.send({ type = "balance.meta", trackingStart = "2026-09-01", initialBalanceMin = 90 }, at(FRI, 10))
+    t.expect(sc.balance.trackingStart).toBe("2026-09-01")
+    t.expect(sc.balance.initialBalanceMin).toBe(90)
+    sc.send({ type = "undo" }, at(FRI, 10, 1))
+    t.expect(sc.balance.trackingStart).toBe("2026-10-01")
+    t.expect(sc.balance.initialBalanceMin).toBe(0)
+    t.expect(sc.send({ type = "balance.meta", trackingStart = "nope" }, at(FRI, 10)).error).toBe("invalid_meta")
   end)
 end)
 

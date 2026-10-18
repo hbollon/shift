@@ -67,7 +67,7 @@ end
 -- Header -----------------------------------------------------------------------
 
 local function undoLabel(undo): string
-  return host.tr("panel.undo." .. undo.action, { time = clock(undo.atS) })
+  return host.tr("panel.undo." .. undo.kind, { time = clock(undo.atS), date = undo.date or "" })
 end
 
 local function header(snap: Snapshot, nowS: number): UiNode

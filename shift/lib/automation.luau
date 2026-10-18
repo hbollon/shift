@@ -8,16 +8,18 @@
 -- in order (ledger writes before the state, persistence before publishing, spec §10.3):
 --
 --   { type = "ledger.addSession", date, session }      { type = "ledger.removeSession", date, id }
---   { type = "ledger.setFlag", date, flag, value }     { type = "state.save" }   { type = "publish" }
+--   { type = "ledger.setFlag", date, flag, value }     { type = "ledger.setDay", date, day }
+--   { type = "balance.save", balance }                 { type = "state.save" }   { type = "publish" }
 --
 -- `result` is `{ ok = true, changed = bool }` or `{ ok = false, error = code }`. Commands
 -- are idempotent: a check-in while working is accepted and changes nothing, so a command
 -- delivered twice is harmless (spec §9.3). When nothing changes, the input state itself
 -- is returned.
 --
---   ctx = { nowS, settings, window = { at(t), nextEdge(t) }, dayOf(date) }
+--   ctx = { nowS, settings, window = { at(t), nextEdge(t) }, dayOf(date), balance }
 --
--- `dayOf` reads recorded days, only to cut a removed absence out of a closed session.
+-- `dayOf` reads recorded days, to cut a removed absence out of a closed session and for
+-- the edits of past days; `balance` is balance.json, for the edits of the Balance tab.
 --
 -- Events (the fields besides `type`):
 --   checkin, checkout, toggle  { origin? }        manual tracking (§6.2), origin "manual" by default
@@ -26,11 +28,17 @@
 --   suggestion.dismiss         { kind }           "Not now" (§6.3.4)
 --   hint.dismiss               { id }             a one-time hint
 --   onboarding.dismiss                            the first-run card (§6.10)
+--   day.save                   { date, sessions, openStartS?, dayOff? }   the day editor (§6.8.2)
+--   day.flag                   { date, flag, value }   dayOff or missingConfirmed (§6.6)
+--   adjust.add                 { id, date, minutes, note }   a balance adjustment (§6.6)
+--   adjust.remove              { id }
+--   balance.meta               { trackingStart?, initialBalanceMin? }
 --   signal                     { signal, atS?, startS?, endS? }   idle, active, lock, unlock, sleep,
 --                                                 resume, or gap with its interval (§6.3.2)
 --   start                      { startS? }        service start; startS = stale heartbeat (E1)
 --   tick                                          every few seconds: window edges, thresholds
 --   config                     { restarted? }     settings changed; restarted: signal sources too
+--   calendar                                      holidays changed
 --
 -- Before any event, a workday that has ended is rolled over (§6.4).
 
@@ -38,8 +46,11 @@ local Model = require("./model.luau")
 local Time = require("./time.luau")
 local Types = require("./types.luau")
 
+type Adjustment = Types.Adjustment
 type AwaySignal = Types.AwaySignal
+type Balance = Types.Balance
 type Cut = Types.Cut
+type Day = Types.Day
 type Effect = Types.Effect
 type Event = Types.Event
 type PendingAbsence = Types.PendingAbsence
@@ -57,6 +68,7 @@ type WindowProbe = Types.WindowProbe
 -- effects applied.
 type Step = {
   state: State,
+  balance: Types.Balance?,
   effects: { Effect },
   dirty: boolean,
   touched: boolean,
@@ -450,6 +462,137 @@ local function rollover(s: Step)
   s.dirty = true
 end
 
+-- Edits (spec §6.8) -----------------------------------------------------------------------
+
+local EDIT_FLAGS = { dayOff = true, missingConfirmed = true }
+local MAX_ADJUSTMENT_MIN = 1000 * 60
+local MAX_NOTE = 200
+
+local hasFlag = Model.hasFlag
+
+-- A recorded day as this step leaves it (an empty one when nothing was recorded).
+local function recordOf(s: Step, date: string): Day
+  local day = s.dayOf(date)
+  return {
+    sessions = table.clone(sessionsOf(s, date)),
+    flags = table.clone(day and day.flags or {}),
+    note = day and day.note or "",
+  }
+end
+
+local function sameDay(a: Day, b: Day): boolean
+  if #a.sessions ~= #b.sessions or a.note ~= b.note then
+    return false
+  end
+  for i, session in a.sessions do
+    local other = b.sessions[i]
+    if session.id ~= other.id or session.startS ~= other.startS or session.endS ~= other.endS or session.origin ~= other.origin then
+      return false
+    end
+  end
+  for name in EDIT_FLAGS do
+    if hasFlag(a, name) ~= hasFlag(b, name) then
+      return false
+    end
+  end
+  return hasFlag(a, "needsReview") == hasFlag(b, "needsReview")
+end
+
+-- A day off set or cleared today or ahead: the window is evaluated afresh by the next
+-- tick, not as an edge. Its next edge, computed ahead, may have skipped that day.
+local function dayOffChanged(s: Step, date: string)
+  if date >= workdayOf(s, s.now) then
+    s.state.window = nil
+  end
+end
+
+local function setDay(s: Step, date: string, day: Day)
+  if hasFlag(recordOf(s, date), "dayOff") ~= hasFlag(day, "dayOff") then
+    dayOffChanged(s, date)
+  end
+  s.days[date] = table.clone(day.sessions)
+  emit(s, { type = "ledger.setDay", date = date, day = day })
+end
+
+local function setFlag(s: Step, date: string, name: string, value: boolean)
+  emit(s, { type = "ledger.setFlag", date = date, flag = name, value = value })
+  if name == "dayOff" then
+    dayOffChanged(s, date)
+  end
+end
+
+local function saveBalance(s: Step, balance: Balance)
+  s.balance = balance
+  emit(s, { type = "balance.save", balance = balance })
+end
+
+local function findAdjustment(balance: Balance, id: string): number?
+  for index, adjustment in balance.adjustments do
+    if adjustment.id == id then
+      return index
+    end
+  end
+  return nil
+end
+
+-- Adds or removes an adjustment; false when it is already in that state.
+local function setAdjustment(s: Step, adjustment: Adjustment, present: boolean): boolean
+  local balance = s.balance :: Balance
+  local index = findAdjustment(balance, adjustment.id)
+  if (index ~= nil) == present then
+    return false
+  end
+  local next = table.clone(balance)
+  next.adjustments = table.clone(balance.adjustments)
+  if present then
+    table.insert(next.adjustments, adjustment)
+  else
+    table.remove(next.adjustments, index :: number)
+  end
+  saveBalance(s, next)
+  return true
+end
+
+local function metaOf(balance: Balance): Types.BalanceMeta
+  return { trackingStart = balance.trackingStart, initialBalanceMin = balance.initialBalanceMin }
+end
+
+local function setMeta(s: Step, meta: Types.BalanceMeta)
+  local next = table.clone(s.balance :: Balance)
+  next.trackingStart = meta.trackingStart
+  next.initialBalanceMin = meta.initialBalanceMin
+  saveBalance(s, next)
+end
+
+-- Reverts an edit, a flag, an adjustment or a balance change; false when what it changed
+-- was changed again since.
+local function undoEdit(s: Step, top: UndoEntry): boolean
+  local st = s.state
+  if top.action == "edit" then
+    if not sameDay(recordOf(s, top.date), top.after) or st.open ~= top.openAfter then
+      return false
+    end
+    setDay(s, top.date, top.before or Model.newDay())
+    st.open = top.openBefore
+  elseif top.action == "flag" then
+    if hasFlag(s.dayOf(top.date), top.flag) == top.before then
+      return false
+    end
+    setFlag(s, top.date, top.flag, top.before)
+  elseif top.action == "adjust" then
+    if not s.balance or not setAdjustment(s, top.adjustment, not top.added) then
+      return false
+    end
+  elseif top.action == "meta" then
+    local balance = s.balance
+    if not balance or balance.trackingStart ~= top.after.trackingStart or balance.initialBalanceMin ~= top.after.initialBalanceMin then
+      return false
+    end
+    setMeta(s, top.before)
+  end
+  return true
+end
+
 -- Handlers ---------------------------------------------------------------------------
 
 local handlers: { [string]: Handler } = {}
@@ -511,11 +654,13 @@ function handlers.undo(s, event)
       removeSession(s, top.date, top.session.id)
     end
     st.open = { id = top.session.id, startS = top.session.startS, origin = top.session.origin }
-  else
+  elseif top.action == "resolve" then
     if top.cut and not uncut(s, top.cut) then
       return { ok = false, error = "undo_conflict" }
     end
     insertPending(s, top.absence)
+  elseif not undoEdit(s, top) then
+    return { ok = false, error = "undo_conflict" }
   end
   local stack = table.clone(st.undo :: { UndoEntry })
   table.remove(stack)
@@ -572,6 +717,181 @@ handlers["onboarding.dismiss"] = function(s, _event)
   end
   s.state.firstRunDismissed = true
   s.dirty = true
+  return nil
+end
+
+local function invalid(code: string): Result
+  return { ok = false, error = code }
+end
+
+-- The day editor saves a whole day: its sessions, the start of the running session when
+-- it belongs to that day, and the day-off marker. Saving reviews the day (needsReview).
+-- A day with pending absences is locked until they are resolved.
+handlers["day.save"] = function(s, event)
+  local st, date = s.state, event.date
+  if not Time.isDate(date) or type(event.sessions) ~= "table" then
+    return invalid("invalid_day")
+  end
+  for _, absence in st.pending or {} do
+    if absence.date == date then
+      return invalid("pending")
+    end
+  end
+  local open = st.open
+  local openHere = open ~= nil and workdayOf(s, open.startS) == date
+  local draft: Model.DayDraft = { date = date :: string, sessions = {} }
+  if openHere then
+    draft.openStartS = if type(event.openStartS) == "number" then math.floor(event.openStartS) else (open :: any).startS
+  end
+  for _, session in event.sessions :: { any } do
+    if type(session) ~= "table" or type(session.startS) ~= "number" or type(session.endS) ~= "number" then
+      return invalid("invalid_day")
+    end
+    table.insert(draft.sessions, { startS = math.floor(session.startS), endS = math.floor(session.endS) })
+  end
+  local _, reason = Model.validateDay(draft, s.settings.dayStartHour, s.now)
+  if reason then
+    return invalid("invalid_" .. reason)
+  end
+
+  local before = recordOf(s, date :: string)
+  -- Unchanged sessions keep their origin; edited ones become manual.
+  local origins = {}
+  for _, session in before.sessions do
+    origins[session.startS .. "-" .. session.endS] = session.origin
+  end
+  table.sort(draft.sessions, function(a, b)
+    return a.startS < b.startS
+  end)
+  local after: Day = { sessions = {}, flags = table.clone(before.flags), note = before.note }
+  for _, session in draft.sessions do
+    table.insert(after.sessions, {
+      id = Model.sessionId(session.startS),
+      startS = session.startS,
+      endS = session.endS,
+      origin = origins[session.startS .. "-" .. session.endS] or "manual",
+    })
+  end
+  local flags: { [string]: boolean? } = after.flags
+  flags.needsReview = nil
+  if type(event.dayOff) == "boolean" then
+    flags.dayOff = event.dayOff or nil
+  end
+  local openAfter = open
+  if openHere and draft.openStartS ~= (open :: any).startS then
+    local startS = draft.openStartS :: number
+    openAfter = { id = Model.sessionId(startS), startS = startS, origin = (open :: any).origin }
+  end
+  if sameDay(before, after) and openAfter == open then
+    return UNCHANGED
+  end
+  setDay(s, date :: string, after)
+  st.open = openAfter
+  pushUndo(s, {
+    id = string.format("edit:%s:%d", date, s.now),
+    action = "edit",
+    atS = s.now,
+    date = date :: string,
+    before = before,
+    after = after,
+    openBefore = open,
+    openAfter = openAfter,
+  })
+  return nil
+end
+
+-- Marks a day off (target 0), or a missing day as not worked (spec §6.6, §6.6.1).
+handlers["day.flag"] = function(s, event)
+  local date, name, value = event.date, event.flag, event.value
+  if not Time.isDate(date) or not EDIT_FLAGS[name] or type(value) ~= "boolean" then
+    return invalid("invalid_flag")
+  end
+  local before = hasFlag(s.dayOf(date :: string), name :: string)
+  if before == value then
+    return UNCHANGED
+  end
+  setFlag(s, date :: string, name :: string, value :: boolean)
+  pushUndo(s, {
+    id = string.format("flag:%s:%s:%s", date, name, tostring(value)),
+    action = "flag",
+    atS = s.now,
+    date = date :: string,
+    flag = name :: string,
+    before = before,
+  })
+  return nil
+end
+
+local function trimNote(note: any): string
+  if type(note) ~= "string" then
+    return ""
+  end
+  return string.sub(string.match(note, "^%s*(.-)%s*$") :: string, 1, MAX_NOTE)
+end
+
+-- Adjustments carry an id chosen by the sender, so adding one twice changes nothing.
+handlers["adjust.add"] = function(s, event)
+  local minutes = event.minutes
+  if
+    not s.balance
+    or type(event.id) ~= "string"
+    or #event.id == 0
+    or #event.id > 64
+    or not Time.isDate(event.date)
+    or type(minutes) ~= "number"
+    or minutes ~= math.floor(minutes)
+    or minutes == 0
+    or math.abs(minutes) > MAX_ADJUSTMENT_MIN
+  then
+    return invalid("invalid_adjustment")
+  end
+  local adjustment = { id = event.id :: string, date = event.date :: string, minutes = minutes :: number, note = trimNote(event.note) }
+  if findAdjustment(s.balance :: Balance, adjustment.id) then
+    return UNCHANGED
+  end
+  setAdjustment(s, adjustment, true)
+  pushUndo(s, { id = "adjust.add:" .. adjustment.id, action = "adjust", atS = s.now, adjustment = adjustment, added = true })
+  return nil
+end
+
+handlers["adjust.remove"] = function(s, event)
+  local balance = s.balance
+  local index = balance and type(event.id) == "string" and findAdjustment(balance, event.id)
+  if not index then
+    return UNCHANGED
+  end
+  local adjustment = (balance :: Balance).adjustments[index]
+  setAdjustment(s, adjustment, false)
+  pushUndo(s, { id = "adjust.remove:" .. adjustment.id, action = "adjust", atS = s.now, adjustment = adjustment, added = false })
+  return nil
+end
+
+-- Tracking start and initial balance, edited in the Balance tab.
+handlers["balance.meta"] = function(s, event)
+  local balance = s.balance
+  if not balance then
+    return invalid("invalid_meta")
+  end
+  local before = metaOf(balance)
+  local after = table.clone(before)
+  if event.trackingStart ~= nil then
+    if not Time.isDate(event.trackingStart) then
+      return invalid("invalid_meta")
+    end
+    after.trackingStart = event.trackingStart :: string
+  end
+  local initial = event.initialBalanceMin
+  if initial ~= nil then
+    if type(initial) ~= "number" or initial ~= math.floor(initial) or math.abs(initial) > MAX_ADJUSTMENT_MIN then
+      return invalid("invalid_meta")
+    end
+    after.initialBalanceMin = initial
+  end
+  if after.trackingStart == before.trackingStart and after.initialBalanceMin == before.initialBalanceMin then
+    return UNCHANGED
+  end
+  setMeta(s, after)
+  pushUndo(s, { id = string.format("meta:%d", s.now), action = "meta", atS = s.now, before = before, after = after })
   return nil
 end
 
@@ -705,6 +1025,7 @@ function Automation.reduce(state: State, event: Event, ctx: ReduceContext): (Sta
       return nil
     end,
     days = {},
+    balance = ctx.balance,
   }
   rollover(s)
   local result = handler(s, event)
