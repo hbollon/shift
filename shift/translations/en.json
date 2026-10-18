@@ -71,9 +71,9 @@
       "title": "Welcome to Shift",
       "body": "Shift tracks your working time. Check in when you start, check out when you stop; your contract sets the daily target.",
       "contract": "Contract: {hours} a week · {days} · {daily} a day",
-      "checkin": "Check in now",
       "settings": "Adjust settings",
-      "dismiss": "Dismiss"
+      "dismiss": "Dismiss",
+      "balance": "Set starting balance"
     },
     "hero": {
       "of_target": "of {target}",
@@ -84,17 +84,24 @@
     },
     "stats": {
       "week": "This week",
-      "today": "Today"
+      "today": "Today",
+      "balance": "Balance",
+      "with_today": "Balance with today, if the day ended now"
     },
     "today": {
-      "title": "Today",
       "empty": "No sessions yet today.",
       "range": "{from} – {to}",
-      "now": "now"
+      "now": "now",
+      "edit": "Edit",
+      "earlier": {
+        "one": "{count} earlier session",
+        "other": "{count} earlier sessions"
+      }
     },
     "errors": {
       "command": "Shift did not respond. Try again.",
-      "undo_expired": "This action can no longer be undone."
+      "undo_expired": "This action can no longer be undone.",
+      "rejected": "Shift could not apply this change. Check the values and try again."
     },
     "attention": {
       "away": "Away {from} → {to} ({duration})",
@@ -124,6 +131,12 @@
         "one": "{count} min",
         "other": "{count} min"
       },
+      "needs_review": "{date} was closed automatically. Check its end time.",
+      "review": "Review",
+      "to_review": {
+        "one": "{count} day without sessions to review",
+        "other": "{count} days without sessions to review"
+      },
       "holidays": "Public holidays are unavailable: set your country in the settings, or check your connection."
     },
     "automation": {
@@ -145,7 +158,8 @@
       "backends": "Signals",
       "backend": {
         "idle": "Idle detection",
-        "logind": "Lock & sleep"
+        "logind": "Lock & sleep",
+        "holidays": "Public holidays"
       },
       "health": {
         "ok": "Running",
@@ -167,6 +181,76 @@
         "date": "not a valid date (YYYY-MM-DD)",
         "range": "the range ends before it starts"
       }
+    },
+    "tabs": {
+      "today": "Today",
+      "history": "History",
+      "balance": "Balance"
+    },
+    "history": {
+      "week": "Week",
+      "month": "Month",
+      "previous": "Previous",
+      "next": "Next",
+      "today": "Back to today",
+      "loading": "Loading…",
+      "week_total": "Week total"
+    },
+    "day": {
+      "back": "Back",
+      "target": "Target {target}",
+      "worked": "Worked {worked}",
+      "status": {
+        "day_off": "Day off",
+        "missing": "To review",
+        "needs_review": "Closed automatically",
+        "pending": "Pending absences"
+      },
+      "missing_hint": "No sessions were recorded this day. What happened?",
+      "not_worked": "Not worked",
+      "mark_day_off": "Day off",
+      "add_session": "Add session",
+      "pending_hint": "Decide on these absences before editing the sessions.",
+      "before_tracking": "This day is before tracking started: it does not count toward the balance.",
+      "day_off": "Day off",
+      "sessions": "Sessions",
+      "no_sessions": "No sessions.",
+      "delete_session": "Delete session",
+      "errors": {
+        "parse": "Enter times like 9:30, 930 or 9h30.",
+        "order": "A session must end after it starts.",
+        "bounds": "Sessions must stay within this workday.",
+        "future": "A session cannot end in the future.",
+        "overlap": "Sessions cannot overlap."
+      },
+      "confirm_day_off": "This day has sessions: as a day off, all of it counts as overtime.",
+      "cancel": "Cancel",
+      "save": "Save",
+      "confirm": "Confirm"
+    },
+    "balance": {
+      "today": "Today: {delta}",
+      "breakdown": "Initial {initial} · days {days} · adjustments {adjustments}",
+      "adjustments": "Adjustments",
+      "show_all": "Show all ({count})",
+      "page": "{page} / {pages}",
+      "no_adjustments": "No adjustments yet.",
+      "delete": "Delete adjustment",
+      "add_title": "Add adjustment",
+      "add_hint": "Time off, a correction from HR, hours paid out: anything your days do not show.",
+      "amount_placeholder": "-2:00",
+      "note_placeholder": "Note (optional)",
+      "date": "Date",
+      "add": "Add",
+      "invalid_amount": "Enter a duration like -2:00, 1h30 or 1.5.",
+      "settings": "Tracking",
+      "settings_hint": "The balance counts every day from the tracking start, plus the initial balance and the adjustments.",
+      "tracking_summary": "Tracking since {date} · initial {initial}",
+      "edit_tracking": "Edit",
+      "tracking_since": "Tracking since",
+      "initial": "Initial balance",
+      "confirm": "This changes your balance. Confirm to apply.",
+      "confirm_earlier": "Days between the new and the old start without sessions will need a review. Confirm to apply."
     }
   },
   "tile": {

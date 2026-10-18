@@ -414,8 +414,10 @@ target(d) = 0                          if d < tracking_start
           = daily_target               otherwise
 ```
 
-Contract changes apply **from the day they are made**: the service snapshots `{fromDate, weeklyHours, workdays}`
-into `contractHistory`, so past deltas are not recomputed retroactively.
+Contract changes apply **from the day they are made**: the service snapshots `{from, weeklyHours, targets}` into
+`contractHistory` at startup and on every settings change, so past deltas are not recomputed retroactively. The first
+entry also covers the days before it (from tracking start); a second change on the same day replaces the first, and
+changing back to the previous contract that day drops the entry (D37).
 
 **Balance**
 
@@ -449,7 +451,9 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 - Future days can be marked in advance (e.g. next week's vacation) from the month view.
 - Sessions recorded on a day off are kept and count entirely as overtime (target 0). Marking a day that has sessions
   asks for confirmation.
-- A day off is also excluded from automation windows, like `- holidays` (no auto check-in on a vacation day).
+- A day off is also excluded from automation windows, like `- holidays` (no auto check-in on a vacation day). Setting
+  or clearing it for today or a later day, undo included, has the window evaluated afresh by the next tick, without
+  treating it as an edge.
 - Stored as `flags.dayOff` in the ledger. Undoable like any mutation.
 
 ### 6.7 Public holidays
@@ -458,8 +462,10 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 - `holiday_country`: ISO 3166-1 alpha-2. Empty = auto-detect from `LC_TIME` / `LANG` (e.g. `fr_FR.UTF-8` → `FR`).
 - `holiday_region` (advanced): ISO 3166-2 subdivision such as `FR-67` or `DE-BY`. A holiday applies if `global == true`
   or its `counties` contains the region.
-- Cache: `holidays/{CC}-{year}.json` in the data dir, holding the current and the next year. Refreshed at most once
-  per week and on country/region change.
+- Cache: `holidays/{CC}-{year}.json` in the data dir, one raw answer per year, for every year from tracking start
+  (at most 10 years back) to next year: the balance needs past years too (D38). Past years are fetched once; the
+  current and next ones are refreshed at most once a week. A failed request is retried an hour later. A region change
+  only filters the cache again; a country change reads (or fetches) that country's files.
 - Offline: if `noctalia.getSetting("shell.offline_mode")` is true, or the fetch fails, the cache is used. When no
   cache exists, holidays are disabled with a visible hint. Failures never block tracking.
 - Effect: target `0` on contract workdays, and the `holidays` selector in schedule rules (§6.3.3).
@@ -475,12 +481,19 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 
 #### 6.8.2 Day editor
 - Header: date, target, worked, delta, status chips (`holiday`, `day off`, `missing`, `needs review`, `pending`).
-- For a missing day, the three review actions of §6.6 are shown above the (empty) session list.
+- For a missing day, the three review actions of §6.6 are shown above the (empty) session list. *Mark as day off* and
+  *Not worked* apply at once and close the editor; *Add session* adds an empty row.
 - **Day off** toggle (§6.6.1).
-- Sessions list: start/end text inputs, computed duration, delete button. **Add session** button.
-- Pending absences of that day: time range, signal, **[Count as work]** **[Remove]** (decided absences are already
-  reflected in the sessions).
-- **Save** validates and applies everything atomically; **Cancel** discards.
+- Sessions list: start/end text inputs, computed duration, delete button. **Add session** button. The running
+  session, when it belongs to that day, is a row whose start can be edited and whose end is *now* (D39). A time the
+  user did not change keeps its exact recorded value, seconds included.
+- Pending absences of that day (today only, D33): time range, signal, **[Count as work]** **[Remove]**. These apply at
+  once, like the attention cards, and the session inputs stay disabled until no absence is pending, so a cut never
+  conflicts with a draft (D39). Decided absences are already reflected in the sessions.
+- Future days show only the day-off toggle.
+- **Save** validates and applies the sessions and the day-off marker atomically (`day.save`); **Cancel** discards.
+  Saving clears `needsReview`, so Save stays enabled on such a day even without changes (D39). Turning a day with
+  sessions into a day off asks for confirmation inline.
 
 #### 6.8.3 Time input parsing and validation
 - Accepted: `9`, `09`, `930`, `0930`, `9:30`, `9h30`, `9.5` (decimal hours), and `21:15`/`9:15pm` if 12 h is
@@ -490,8 +503,9 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
   workday bounds, end in the future for today.
 
 #### 6.8.4 Undo
-- Every mutation (check in/out, absence resolution, edits, adjustments) pushes an inverse operation onto an undo
-  stack (depth 20, in `state.json`).
+- Every mutation (check in/out, absence resolution, day edits, day-off and not-worked markers, adjustments, tracking
+  start and initial balance) pushes an inverse operation onto an undo stack (depth 20, in `state.json`). Undoing an
+  edit restores the day as it was, provided nothing changed it since.
 - An action can be undone for **10 minutes**, whatever the path: the panel header's **Undo** button (with a tooltip
   naming it, "Undo check out at 17:02"), `ctrl+z` in the panel, and IPC (`undo`). Consecutive undos chain while the
   entries are younger than 10 minutes; older entries stay in the stack but are never undone, so an action from this
@@ -636,16 +650,20 @@ or state changes).
 ### 7.4 Panel (`hbollon/shift:dashboard`)
 
 Manifest defaults: `width = 400`, `height = 686`, `placement = "attached"`, `position = "auto"`,
-`open_near_click = true`. Second ticks are enabled while open. The header and status chip stay at the top and the
-automation footer at the bottom; everything between them (attention cards, hero, stat tiles, tabs) scrolls when it
-does not fit (D35).
+`open_near_click = true`. Second ticks are enabled while open, and each open starts on the Today tab. The header and
+the tabs under it stay at the top, and the automation footer at the bottom. The body between them is laid out to fit
+without scrolling (D41): the full hero only shows on the Today tab when everything fits, lists are capped, and longer
+content goes to a
+**page** that replaces the body (day editor, adjustment form, full ledger, tracking settings, automation details), with
+a back button in its title row. The body still scrolls with unusual content, such as a day with many sessions (D35).
 
 ```
 ┌────────────────────────────────────────────┐
-│ Shift                      Thu, Oct 9   ↶ ⚙ │  header: title · date · undo · settings
-│ ● Working since 08:57       Done at ~17:36 │  status chip · estimated end
+│ Shift                                   ↶ ⚙ │  header: title · undo · settings
+│ ● Working since 08:57 · Done at ~17:36     │  status · estimated end
+│ [ Today ]  [ History ]  [ Balance ]        │  segmented tabs, fixed
 ├────────────────────────────────────────────┤
-│ ⚠ Away 10:12 → 10:54 (42 min) · Locked     │  attention cards (0..n)
+│ ⚠ Away 10:12 → 10:54 (42 min) · Locked     │  attention cards (0..2)
 │               [Count as work]   [Remove]   │
 ├────────────────────────────────────────────┤
 │               ╭───────────╮                │
@@ -655,11 +673,9 @@ does not fit (D35).
 │               ╰───────────╯                │
 │        [  ⇥  Check out  ]                  │  primary action
 ├────────────────────────────────────────────┤
-│ This week     Balance        Today         │  stat tiles
-│ 28:10/35:00   +4:35 ⚖       −1:18          │
+│ This week     Balance        Today         │  stat tiles (Today tab)
+│ 28:10 ▬▬▬░    +4:35 ↗        −1:18         │
 ├────────────────────────────────────────────┤
-│ [ Today ]  [ History ]  [ Balance ]        │  segmented tabs
-│ ───────────────────────────────────────    │
 │ 06  ▕██████▏▕░░▏▕████████▏         20      │  day timeline (sessions/gaps)
 │ 08:57 – 12:31     3:34                     │
 │ 13:22 – now       2:08                     │
@@ -669,44 +685,59 @@ does not fit (D35).
 ```
 
 #### 7.4.1 Header
-Title, today's date (`noctalia.dateFormat()`), an **Undo** ghost button (visible for 10 min after an action, with
-tooltip), and a **Settings** ghost button (`openSettings()`). The status chip shows a dot plus a label: *Working
-since 08:57* / *Away for 12 min* / *Off — last session ended 17:02* / *Suggested: check in?*
+Title, an **Undo** ghost button (visible for 10 min after an action, with tooltip), and a **Settings** ghost button
+(`openSettings()`). Under the title, the status, a dot plus a label: *Working since 08:57* / *Away for 12 min* /
+*Off since 17:02*, followed while working by the estimated end, *"Done at ~17:36"*. It stays in sight on every tab
+and page.
 
 #### 7.4.2 Attention cards
-Stacked cards, most recent first, with a maximum of 3 (then "+2 more → History"): pending absences, suggestions
+Stacked cards, most recent first, with a maximum of 2 (then "+2 more"); a card with a single action keeps it on its
+text's line. The cards: pending absences, suggestions
 (*"It's 08:14 on a workday — start your shift?"* **[Check in]** **[Not now]**), rule errors, missing backend hints,
-days flagged `needsReview`, and missing days to review (one grouped card: *"2 days to review"* → History).
+days flagged `needsReview` (one card per day, **[Review]** opens its day editor), and missing days to review (one
+grouped card: *"2 days to review"*, **[Review]** opens the oldest one's editor).
 
 #### 7.4.3 Hero
 Ring (168 px) with the worked time in large bold, units smaller (`7h 30m`, `7.50 h`), and with the `H:MM` format the
 seconds small and muted (`:SS`); the other formats are too wide for them. The counter shrinks when it would not fit
 inside the ring (`10:30`), *"of 7:00"*, *"1:18 left"* or *"+0:23 over"* (in
-`tertiary`). The estimated end, *"Done at ~17:36"*, sits at the right of the status chip while working, to keep the
+`tertiary`). The estimated end, *"Done at ~17:36"*, sits in the header while working, to keep the
 hero compact. On non-workdays it shows *"No target today"* and the ring
 shows worked time with a neutral track. The primary button, 14 px below the ring, is **Check in** (`primary` variant)
 or **Check out** (`outline` variant).
+
+The **compact hero** replaces it on the History and Balance tabs, during onboarding, and on the Today tab when the
+cards, the tiles and the sessions would not fit with the full one: a 40 px ring, the worked time, the same details on
+one line, and the button, all on one row.
 
 The counter sits inside the ring through `lib/ui/overlay.luau` (C8, D31). If the overlay ever stops working, only that
 helper changes, to place the text next to the ring.
 
 #### 7.4.4 Stat tiles
-Three equal tiles (`surface_variant` fill, `radius` from shell style): **This week** (worked/target plus a thin
-`ui.progress`), **Balance** (settled, with a trend glyph), **Today** (today's delta). Each tile is clickable and
-opens the relevant tab.
+On the Today tab, three equal tiles (`surface_variant` fill, `radius` from shell style), for information only (the
+tabs navigate): **This week** (worked time plus a thin `ui.progress` toward the target), **Balance** (settled, and
+under it the balance with today, if the day ended now, explained by the tile's tooltip; a glyph tells where today
+takes it, in fixed colors that read the same with every theme: `trending-up` green, `arrow-right` grey within a
+minute, `trending-down` red), **Today** (today's delta).
 
 #### 7.4.5 Tabs
+A segmented bar fixed under the header, on every tab and page; choosing a tab closes the open page.
+
 - **Today**: day timeline (a row of proportional `ui.box` segments from `day_start_hour` to now, sessions in
   `primary`, gaps in `on_surface/0.08`, pending absences in `secondary/0.6`; a kept absence is drawn as work, a removed
   one is a gap between two sessions), followed by the session list, most recent first (the
-  running session stays on top). A long list scrolls with the panel body. Clicking a session opens the day editor.
+  running session stays on top). It lists the latest 3, then *"2 earlier sessions"* with **Edit**. Each row ends with a
+  pencil button (tooltip *Edit*) that opens the day editor: rows open editors through such a button only, which has
+  the hover state, the pointer cursor and a tooltip next to the cursor (the host anchors tooltips under their node).
 - **History**: week view by default, with a week/month toggle (§6.8.1). Bars use `primary` up to the target and
   `tertiary` above it. A target tick is drawn with an `outline` 1 px box. Holidays show `beach`, missing days show
   a `secondary` dot. Container tooltips show exact values.
-- **Balance**: big balance value with a breakdown (initial balance · accumulated delta · adjustments) and the
-  *days to review* counter when non-zero, the adjustment
-  ledger (date, ±duration, note, delete), and an **Add adjustment** form (amount, date defaulting to today, note).
-  It also has an editable *Tracking since* and *Initial balance* (with confirmation, since they change the balance).
+- **Balance**: big balance value with a breakdown (initial balance · accumulated delta · adjustments), the latest 3
+  adjustments (date, ±duration, note, delete) with **Show all (n)**, and a *Tracking since … · initial …* row. The
+  days left to review are asked by their attention card. **+ Add** opens the adjustment page (amount, note, date
+  defaulting to today); **Show all** the full ledger, 8 per page with a ‹ 1 / 3 › pager; the tracking row's pencil
+  button the *Tracking since* and *Initial balance* page (with confirmation, since they change the balance).
+  Dates are picked with a ‹ date › stepper, one day per click, shown in the user's locale (D40).
 
 #### 7.4.6 Automation footer
 A one-line summary: preset · idle timeout · condensed window · number of additional rules. A **ⓘ** replaces the panel
@@ -853,7 +884,7 @@ unit-testable with the standalone `luau` CLI.
 | `lib/holidays.luau` | – | Fetch, cache, region filter |
 | `lib/commands.luau` | – | UI → service command channel: senders with retry, receiver with at-most-once handling and acknowledgements (§9.3) |
 | `lib/host.luau` | – | Thin adapter over `noctalia.*` (C10) |
-| `lib/ui/*.luau` | – | Shared components: ring, chips, stat tile, card, bar chart, timeline, inputs |
+| `lib/ui/*.luau` | – | Dashboard views and shared components: `overlay` (counter over the ring), `widgets` (chips, buttons, page headers, date stepper), `history` (week bars, month grid), `editor` (day editor), `balance` (Balance tab and its pages) |
 | `lib/format.luau` | ✓ | Duration/time display according to settings |
 
 The **automation reducer** is the heart of the design: every signal, tick, user command and IPC call becomes an
@@ -874,7 +905,7 @@ deterministic and fully testable with a fake clock.
     workedClosedMs = 12840000, -- closed sessions
     openStartMs = 1791547320000, -- nil when off
     targetMs = 25200000,
-    isWorkday = true, holiday = nil,
+    isWorkday = true, holiday = nil, dayOff = false, -- holiday: its local name
     sessions = { { startS = 1791529020, endS = 1791541860 } }, -- closed sessions, for the Today view
     absences = { { startS = 1791540720, endS = 1791543240 } }, -- today's pending absences, for the timeline
   },
@@ -882,7 +913,8 @@ deterministic and fully testable with a fake clock.
   balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
   pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } }, -- strongest signal
   suggestion = nil,            -- "checkin" | "checkout"
-  undo = { id = "checkout:s_tmn2rc", action = "checkout", atS = 1791558120 }, -- nil after 10 min; UIs build the label
+  undo = { id = "checkout:s_tmn2rc", action = "checkout", kind = "checkout", atS = 1791558120, date = nil },
+    -- nil after 10 min; UIs build the label from `kind` ("edit", "day_off", "adjust_add"…) and `date`
   automation = {
     preset = "assisted", idleMin = 5,
     window = { start = "08:00", ["end"] = "19:00", extraRules = 1 }, -- UIs build the summary with the contract days
@@ -891,14 +923,21 @@ deterministic and fully testable with a fake clock.
     preview = { "000000004444024444400000", … }, -- 7 days × 24 hours, quarters inside the window
     hints = { "swayidle" },    -- one-time hints not dismissed yet
   },
-  contract = { weeklyHours = 35, workdays = { true, true, true, true, true, false, false }, dailyTargetMs = 25200000 },
+  contract = { weeklyHours = 35, workdays = { true, true, true, true, true, false, false }, dailyTargetMs = 25200000,
+               dayStartHour = 4 },
   flags = { firstRun = false, needsReview = { "2026-10-07" } },
   display = { durationFormat = "colon" }, -- settings the UIs need to render
 }
 ```
 
-History data for the panel is requested on demand (`shift.cmd` `history.get {from, to}`) and answered on
-`shift.history` to keep the snapshot small.
+History data for the panel is requested on demand (`shift.cmd` `history.get {from, to}`, at most 42 days: a month
+grid) and answered on `shift.history` = `{ from, to, days = { {date, workedMs, targetMs, holiday, dayOff, missing,
+missingConfirmed, needsReview, sessions} } }`, to keep the snapshot small. The service remembers the last range and
+publishes it again whenever the data changes.
+
+**`shift.balance`** (service → UIs), published whenever the balance changes: `{ trackingStart, initialBalanceMin,
+adjustments, initialMs, deltaMs, adjustmentsMs, settledMs, toReview }`, for the Balance tab. The balance is computed
+again only after a change of the data or of the day.
 
 **`shift.cmd`** (UIs → service). Every UI runtime is a sender with a unique id `from` (entry kind, load time
 and a random number, e.g. `bar.19a1208aa73b-5f3a9c`, so two bar widgets or a reloaded widget never collide). A sender publishes the list of its
@@ -910,6 +949,10 @@ and a random number, e.g. `bar.19a1208aa73b-5f3a9c`, so two bar widgets or a rel
 { from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 44, type = "day.save", date = "2026-10-08", sessions = { … } } } }
 { from = "dashboard.19a1208ab01c-0b17e2", cmds = { { seq = 45, type = "adjust.add", id = "j_7c", date = "2026-10-09", minutes = -120, note = "Dentist" } } }
 ```
+
+Edit commands: `day.save {date, sessions = {{startS, endS}}, openStartS?, dayOff?}`, `day.flag {date, flag = "dayOff" |
+"missingConfirmed", value}`, `adjust.add {id, date, minutes, note}` (the sender picks the id), `adjust.remove {id}`,
+`balance.meta {trackingStart?, initialBalanceMin?}`. Each names the state it sets, so it is idempotent.
 
 Delivery protocol (spike S5: each entry's event queue is bounded at 64 and drops state-watch results when full, so a
 single `set` can be lost):
@@ -1248,3 +1291,8 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D34 | Signal streams run inside a small shell wrapper that reports their process group and exit status; the service stops a stream by killing its group. | `runStream` cannot stop a stream nor report its end (S1), and a stale `swayidle` would keep one of the 4 stream slots of the entry until the plugin reloads. |
 | D35 | The panel body scrolls between a fixed header/status and a fixed automation footer, instead of a scrolling session list. | Attention cards come and go; one scroll handles every overflow, and the footer stays reachable. |
 | D36 | A removed absence is cut out of its session (check-out at its start, check-in at its end); decided absences leave no other record. The reducer reads recorded days for that cut only. | Work periods stay readable on the timeline, undo can join the session back, and sessions alone give worked time, so the day editor, history and export never subtract absences. Replaces `kept`/`removed` absence records subtracted from worked time. |
+| D37 | The contract history is kept in sync by the service at startup and on settings changes; same-day changes replace each other. | Contract settings live in Noctalia's config, which the plugin cannot version: a snapshot per day of change is the only way to keep past targets. |
+| D38 | Holidays are cached for every year from tracking start to next year; past years are fetched once. | The balance needs the holidays of every counted day, not only this year's. |
+| D39 | In the day editor, pending absences apply at once and lock the sessions; the running session's start is editable; Save reviews a `needsReview` day. | No conflict between an absence cut and a draft; "I started at 8:30, checked in at 9:00" is the most common fix; reviewing is one click. |
+| D40 | Dates (adjustment date, tracking start) are picked with a ‹ date › stepper, not typed. | No date format to learn or to parse per locale; distant dates are rare. |
+| D41 | The panel fits its fixed size without scrolling: tabs fixed under the header, stat tiles on Today only, a compact hero when the content would not fit, capped lists, and pages for forms and full lists. | Scrollbars appearing on tab changes felt cramped; tabs that never move are the clearest navigation (tiles used as tabs were not obvious); plugins cannot resize their panel at runtime (host-owned size, no `setSize`). |

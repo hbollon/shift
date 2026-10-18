@@ -1,16 +1,22 @@
 --!nonstrict
--- Shift dashboard panel (spec §7.4): header with undo, status, attention cards, first-run
--- card, hero ring with the live counter and the check in/out button, stat tiles, today's
--- timeline, and the automation footer with its details. It renders the core snapshot
--- every second while open and sends actions as commands.
+-- Shift dashboard panel (spec §7.4): header with the status and undo, the Today / History /
+-- Balance tabs, attention cards, first-run card, hero ring with the live counter and the
+-- check in/out button (or its compact line), stat tiles, the tab's content, pages (day
+-- editor, balance forms, automation details), and the automation footer. It renders the
+-- core snapshot every second while open and sends actions as commands.
 
+local BalanceView = require("./lib/ui/balance.luau")
 local Commands = require("./lib/commands.luau")
+local Editor = require("./lib/ui/editor.luau")
 local Format = require("./lib/format.luau")
+local History = require("./lib/ui/history.luau")
 local Host = require("./lib/host.luau")
 local Model = require("./lib/model.luau")
 local Overlay = require("./lib/ui/overlay.luau")
 local Ring = require("./lib/ring.luau")
+local Time = require("./lib/time.luau")
 local Types = require("./lib/types.luau")
+local Widgets = require("./lib/ui/widgets.luau")
 
 type Snapshot = Types.Snapshot
 type Live = Types.Live
@@ -19,6 +25,8 @@ local HERO_RING = 168
 local HERO_STROKE = 11
 -- Space between the ring and the check-in button.
 local HERO_BUTTON_GAP = 14
+local COMPACT_RING = 40
+local COMPACT_STROKE = 5
 local COUNTER_SIZE = 36
 local COUNTER_MIN = 22
 -- Width the counter may take inside the ring. The lines below it lift it above the
@@ -36,20 +44,47 @@ local RADIUS = 12
 local ROW_HEIGHT = 22
 local ROW_GAP = 6
 -- Attention cards shown at once; the rest are counted.
-local MAX_CARDS = 3
+local MAX_CARDS = 2
+-- Sessions listed on the Today tab, most recent first.
+local MAX_SESSIONS = 3
+-- Rough heights (px) to tell whether the Today tab fits the panel with the full hero; it
+-- takes the compact one otherwise. The body is the panel's height (plugin.toml) minus the
+-- header, the tabs, the footer and the margins.
+local BODY_HEIGHT = 686 - 146 - 50
+local BODY_GAP = 12
+local HERO_HEIGHT = HERO_RING + HERO_BUTTON_GAP + 44
+local TILES_HEIGHT = 74
+local CARD_HEIGHTS = { row = 52, column = 96, label = 18 } -- one action, two actions, "+N more"
+local ERROR_HEIGHT = 28 -- the command error line, above the body
+local EMPTY_HEIGHT = 16 -- "No sessions yet today."
+local TIMELINE_HEIGHT = 30
 local PREVIEW_LABEL = 32
+local TREND_COLORS = { up = "#4caf50", flat = "#9e9e9e", down = "#e53935" }
 
 local host = Host.new()
 local snapshot: Snapshot? = host.state.get("shift.snapshot")
+local history: Types.HistoryInfo? = host.state.get("shift.history") -- days the panel asked for
+local balanceInfo: Types.BalanceInfo? = host.state.get("shift.balance")
 local isOpen = false
 local commandError: string? = nil -- shown inline until the next action
 local detailsOpen = false -- the automation details replace the dashboard body
+local tab = "today"
+local historyState: History.HistoryState = { mode = "week", anchor = "" }
+local balanceState = BalanceView.new()
+local editor: Editor.EditorState? = nil -- the day editor replaces the dashboard body
+local requested: string? = nil -- range of the last history request
 
 local render -- forward declaration: commands re-render on failure
 
 local sender = Commands.sender(host, "dashboard", function(cmd, err)
   host.log(string.format("dashboard: command %s failed: %s", tostring(cmd.type), tostring(err)))
-  commandError = err == "nothing_to_undo" and host.tr("panel.errors.undo_expired") or host.tr("panel.errors.command")
+  if err == "nothing_to_undo" then
+    commandError = host.tr("panel.errors.undo_expired")
+  elseif err == "timeout" then
+    commandError = host.tr("panel.errors.command")
+  else
+    commandError = host.tr("panel.errors.rejected")
+  end
   if isOpen then
     render()
   end
@@ -67,16 +102,48 @@ end
 -- Header -----------------------------------------------------------------------
 
 local function undoLabel(undo): string
-  return host.tr("panel.undo." .. undo.kind, { time = clock(undo.atS), date = undo.date or "" })
+  local date = undo.date and Widgets.date(host, undo.date, "%a %d %b") or ""
+  return host.tr("panel.undo." .. undo.kind, { time = clock(undo.atS), date = date })
 end
 
-local function header(snap: Snapshot, nowS: number): UiNode
+local DOT_COLORS = { working = "primary", away = "secondary", off = "on_surface_variant" }
+
+-- "Working since 9:02 · Done at ~17:12": the status, with the estimated end of the day
+-- while working.
+local function statusText(snap: Snapshot, live: Live, nowS: number): string
+  local status = snap.status
+  local text
+  if status == "away" and snap.since then
+    local minutes = (nowS - snap.since) // 60
+    if minutes < 60 then
+      text = host.trp("panel.status.away_for", minutes)
+    else
+      text = host.tr("panel.status.away_since", { time = clock(snap.since) })
+    end
+  elseif status == "working" and snap.since then
+    text = host.tr("panel.status.working_since", { time = clock(snap.since) })
+  elseif snap.since then
+    text = host.tr("panel.status.off_since", { time = clock(snap.since) })
+  else
+    text = host.tr("panel.status.off")
+  end
+  if live.etaS then
+    text ..= " · " .. host.tr("panel.hero.done_at", { time = clock(live.etaS) })
+  end
+  return text
+end
+
+-- Title, with the status under it: it stays in sight on every tab and page.
+local function header(snap: Snapshot, live: Live, nowS: number): UiNode
   local undo = snap.undo
   local canUndo = undo ~= nil and nowS - undo.atS < Model.UNDO_WINDOW_S
   return ui.row({ align = "center", gap = 4 }, {
-    ui.column({ flexGrow = 1, gap = 0 }, {
+    ui.column({ flexGrow = 1, gap = 2 }, {
       ui.label({ text = host.tr("panel.title"), fontSize = 16, fontWeight = "bold" }),
-      ui.label({ text = host.formatTime(host.dateFormat(), nowS), fontSize = 12, color = "on_surface_variant" }),
+      ui.row({ align = "center", gap = 6 }, {
+        ui.box({ width = 8, height = 8, radius = 4, fill = DOT_COLORS[snap.status] }),
+        ui.label({ text = statusText(snap, live, nowS), fontSize = 12, color = "on_surface_variant", maxLines = 1 }),
+      }),
     }),
     ui.button({
       glyph = "history",
@@ -100,39 +167,6 @@ local function header(snap: Snapshot, nowS: number): UiNode
   })
 end
 
-local DOT_COLORS = { working = "primary", away = "secondary", off = "on_surface_variant" }
-
--- Status chip, with the estimated end of the day on the right while working.
-local function statusChip(snap: Snapshot, live: Live, nowS: number): UiNode
-  local status = snap.status
-  local text
-  if status == "away" and snap.since then
-    local minutes = (nowS - snap.since) // 60
-    if minutes < 60 then
-      text = host.trp("panel.status.away_for", minutes)
-    else
-      text = host.tr("panel.status.away_since", { time = clock(snap.since) })
-    end
-  elseif status == "working" and snap.since then
-    text = host.tr("panel.status.working_since", { time = clock(snap.since) })
-  elseif snap.since then
-    text = host.tr("panel.status.off_since", { time = clock(snap.since) })
-  else
-    text = host.tr("panel.status.off")
-  end
-  return ui.row({ align = "center", justify = "space_between" }, {
-    ui.row({ align = "center", gap = 8, paddingH = 10, paddingV = 4, radius = 999, fill = "surface_variant" }, {
-      ui.box({ width = 8, height = 8, radius = 4, fill = DOT_COLORS[status] }),
-      ui.label({ text = text, fontSize = 12 }),
-    }),
-    ui.label({
-      text = live.etaS and host.tr("panel.hero.done_at", { time = clock(live.etaS) }) or "",
-      fontSize = 12,
-      color = "on_surface_variant",
-    }),
-  })
-end
-
 -- Attention cards (spec §7.4.2) -------------------------------------------------------
 
 -- "42 min" under an hour, else a duration in the user's format.
@@ -144,25 +178,29 @@ local function shortDuration(ms: number, fmt: Types.DurationFormat): string
   return Format.duration(ms, fmt)
 end
 
-local function smallButton(text: string, variant: string, onClick: () -> ()): UiNode
-  return ui.button({ text = text, variant = variant, controlSize = "sm", onClick = onClick })
-end
+local smallButton = Widgets.smallButton
 
 local function card(glyph: string, text: string, actions: { UiNode }): UiNode
-  local children = {
-    ui.row({ align = "center", gap = 10 }, {
-      ui.glyph({ name = glyph, color = "secondary" }),
-      ui.label({ text = text, flexGrow = 1, maxLines = 2, fontSize = 13 }),
-    }),
+  local line = {
+    ui.glyph({ name = glyph, color = "secondary" }),
+    ui.label({ text = text, flexGrow = 1, maxLines = 2, fontSize = 13 }),
   }
+  -- A single action fits on the text's line; two go under it.
+  if #actions == 1 then
+    table.insert(line, actions[1])
+    return ui.row({ align = "center", gap = 10, paddingH = 12, paddingV = 8, radius = RADIUS, fill = "surface_variant" }, line)
+  end
+  local children = { ui.row({ align = "center", gap = 10 }, line) }
   if #actions > 0 then
     table.insert(children, ui.row({ gap = 8, justify = "end" }, actions))
   end
   return ui.column({ gap = 8, padding = 12, radius = RADIUS, fill = "surface_variant" }, children)
 end
 
+local openEditor -- forward declaration: cards open the day editor
+
 -- Cards in priority order: a suggestion, pending absences (most recent first), invalid
--- settings, then one-time hints.
+-- settings, days to review, then one-time hints.
 local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
   local fmt = snap.display.durationFormat
   local cards = {}
@@ -202,6 +240,21 @@ local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
       end),
     }))
   end
+  for _, date in snap.flags.needsReview do
+    table.insert(cards, card("alert-circle", host.tr("panel.attention.needs_review", { date = Widgets.date(host, date, "%a %d %b") }), {
+      smallButton(host.tr("panel.attention.review"), "outline", function()
+        openEditor(date)
+      end),
+    }))
+  end
+  local toReview = snap.balance.toReview
+  if #toReview > 0 then
+    table.insert(cards, card("calendar-question", host.trp("panel.attention.to_review", #toReview), {
+      smallButton(host.tr("panel.attention.review"), "outline", function()
+        openEditor(toReview[1])
+      end),
+    }))
+  end
   for _, hint in snap.automation.hints do
     table.insert(cards, card("info-circle", host.tr("panel.attention." .. hint), {
       smallButton(host.tr("panel.attention.dismiss"), "ghost", function()
@@ -217,6 +270,15 @@ local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
   return cards
 end
 
+-- Estimated height of the cards, gaps included.
+local function cardsHeight(cards: { UiNode }): number
+  local height = 0
+  for _, node in cards do
+    height += (CARD_HEIGHTS[node.type] or CARD_HEIGHTS.column) + BODY_GAP
+  end
+  return height
+end
+
 -- First-run card (spec §6.10) ------------------------------------------------------
 
 local function dayNames(): { string }
@@ -226,6 +288,8 @@ local function dayNames(): { string }
   end
   return names
 end
+
+local openTab -- forward declaration: the welcome card opens the Balance tab
 
 local function welcomeCard(snap: Snapshot): UiNode
   local contract = snap.contract
@@ -253,19 +317,18 @@ local function welcomeCard(snap: Snapshot): UiNode
     ui.label({ text = summary, color = "on_surface_variant", fontSize = 12, maxLines = 2 }),
     ui.row({ gap = 8 }, {
       ui.button({
-        text = host.tr("panel.welcome.checkin"),
-        glyph = "login-2",
-        variant = "primary",
-        onClick = function()
-          send({ type = "checkin" })
-        end,
-      }),
-      ui.button({
         text = host.tr("panel.welcome.settings"),
         glyph = "settings",
         variant = "outline",
         onClick = function()
           host.openSettings()
+        end,
+      }),
+      ui.button({
+        text = host.tr("panel.welcome.balance"),
+        variant = "ghost",
+        onClick = function()
+          openTab("balance", "settings")
         end,
       }),
     }),
@@ -360,6 +423,19 @@ local function counter(ms: number, fmt: Types.DurationFormat): (UiNode, number)
   return ui.row({ align = "end", gap = COUNTER_GAP }, nodes), size
 end
 
+local function checkButton(working: boolean, size: string, width: number?): UiNode
+  return ui.button({
+    text = host.tr(working and "panel.checkout" or "panel.checkin"),
+    glyph = working and "logout" or "login-2",
+    variant = working and "outline" or "primary",
+    controlSize = size,
+    width = width,
+    onClick = function()
+      send({ type = working and "checkout" or "checkin" })
+    end,
+  })
+end
+
 local function hero(snap: Snapshot, live: Live): UiNode
   local working = snap.status ~= "off"
   local fmt = snap.display.durationFormat
@@ -380,45 +456,77 @@ local function hero(snap: Snapshot, live: Live): UiNode
       ui.progress({ progress = math.min(progress, 1), width = HERO_RING, height = 6, radius = 3 }),
     })
   end
-
-  local children = { visual }
-  table.insert(children, ui.button({
-    text = host.tr(working and "panel.checkout" or "panel.checkin"),
-    glyph = working and "logout" or "login-2",
-    variant = working and "outline" or "primary",
-    controlSize = "lg",
-    width = 200,
-    onClick = function()
-      send({ type = working and "checkout" or "checkin" })
-    end,
-  }))
-  return ui.column({ align = "center", gap = HERO_BUTTON_GAP }, children)
+  return ui.column({ align = "center", gap = HERO_BUTTON_GAP }, { visual, checkButton(working, "lg", 200) })
 end
 
--- Stat tiles (spec §7.4.4) ------------------------------------------------------------
+-- The hero on the History and Balance tabs, during onboarding, and on Today when the full
+-- one would not fit: a small ring, the counter and the button on one line.
+local function compactHero(snap: Snapshot, live: Live): UiNode
+  local working = snap.status ~= "off"
+  local fmt = snap.display.durationFormat
+  local progress = live.targetMs > 0 and live.workedMs / live.targetMs or 0
+  local children = {}
+  local ringPath = Ring.path(host, COMPACT_RING, COMPACT_STROKE, progress, not working)
+  if ringPath then
+    table.insert(children, ui.image({ path = ringPath, width = COMPACT_RING, height = COMPACT_RING }))
+  end
+  local details = heroDetails(live, fmt)
+  local line = {}
+  for _, detail in details do
+    table.insert(line, detail.props.text)
+  end
+  table.insert(children, ui.column({ flexGrow = 1, gap = 0 }, {
+    ui.label({ text = Format.duration(live.workedMs, fmt), fontSize = 20, fontWeight = "bold" }),
+    ui.label({ text = table.concat(line, " · "), fontSize = 12, color = "on_surface_variant", maxLines = 1 }),
+  }))
+  table.insert(children, checkButton(working, "md"))
+  return ui.row({ align = "center", gap = 12 }, children)
+end
 
-local function tile(title: string, value: string, valueColor: string?, extra: UiNode?): UiNode
+-- Stat tiles (spec §7.4.4) --------------------------------------------------------------
+
+local function tile(title: string, value: string, valueColor: string?, extra: UiNode?, tooltip: string?): UiNode
   local children = {
     ui.label({ text = title, fontSize = 12, color = "on_surface_variant" }),
-    ui.label({ text = value, fontSize = 16, fontWeight = "bold", color = valueColor }),
+    ui.label({ text = value, fontSize = 15, fontWeight = "bold", color = valueColor, maxLines = 1 }),
   }
   if extra then
     table.insert(children, extra)
   end
-  return ui.column({ flexGrow = 1, gap = 4, padding = 12, radius = RADIUS, fill = "surface_variant" }, children)
+  return ui.column({ flexGrow = 1, gap = 4, padding = 10, radius = RADIUS, fill = "surface_variant", tooltip = tooltip }, children)
 end
 
-local function stats(snap: Snapshot, live: Live): UiNode
+local function tiles(snap: Snapshot, live: Live): UiNode
   local fmt = snap.display.durationFormat
   local week = Format.duration(live.weekWorkedMs, fmt)
   local weekProgress
   if live.weekTargetMs > 0 then
-    week = week .. " / " .. Format.duration(live.weekTargetMs, fmt)
     weekProgress = ui.progress({ progress = math.min(1, live.weekWorkedMs / live.weekTargetMs), height = 4, radius = 2 })
   end
+  local settled = snap.balance.settledMs
   local delta = live.workedMs - live.targetMs
+  -- Where today takes the balance if the day ended now: up, flat or down, in fixed colors
+  -- that read the same with every theme.
+  local glyph, color = "arrow-right", TREND_COLORS.flat
+  if delta >= 60000 then
+    glyph, color = "trending-up", TREND_COLORS.up
+  elseif delta <= -60000 then
+    glyph, color = "trending-down", TREND_COLORS.down
+  end
+  -- The value alone fits the tile with any format; the tooltip says what it is.
+  local trend = ui.row({ align = "center", gap = 4 }, {
+    ui.glyph({ name = glyph, size = 12, color = color }),
+    ui.label({ text = Format.signed(settled + delta, fmt), fontSize = 12, color = color, maxLines = 1 }),
+  })
   return ui.row({ gap = 8 }, {
     tile(host.tr("panel.stats.week"), week, nil, weekProgress),
+    tile(
+      host.tr("panel.stats.balance"),
+      Format.signed(settled, fmt),
+      settled >= 60000 and "tertiary" or nil,
+      trend,
+      host.tr("panel.stats.with_today")
+    ),
     tile(host.tr("panel.stats.today"), Format.signed(delta, fmt), delta >= 60000 and "tertiary" or nil, nil),
   })
 end
@@ -497,30 +605,45 @@ local function timeline(sessions, absences, nowS: number): UiNode
   })
 end
 
-local function today(snap: Snapshot, nowS: number): UiNode
+-- The Today tab and its estimated height.
+local function today(snap: Snapshot, nowS: number): (UiNode, number)
   local fmt = snap.display.durationFormat
   local sessions = todaySessions(snap, nowS)
-  local children = { ui.label({ text = host.tr("panel.today.title"), fontWeight = "medium" }) }
+  local children = {}
   if #sessions == 0 then
     table.insert(children, ui.label({ text = host.tr("panel.today.empty"), color = "on_surface_variant", fontSize = 12 }))
-    return ui.column({ gap = 8 }, children)
+    return ui.column({ gap = 8 }, children), EMPTY_HEIGHT
   end
   table.insert(children, timeline(sessions, snap.today.absences, nowS))
-  -- Most recent first: the running session stays on top.
+  -- Most recent first: the running session stays on top. Older ones are in the editor.
   local rows = {}
-  for index = #sessions, 1, -1 do
+  for index = #sessions, math.max(1, #sessions - MAX_SESSIONS + 1), -1 do
     local session = sessions[index]
     local range = host.tr("panel.today.range", {
       from = clock(session.startS),
       to = session.open and host.tr("panel.today.now") or clock(session.endS),
     })
-    table.insert(rows, ui.row({ align = "center", height = ROW_HEIGHT }, {
+    -- The pencil is the only target: a button has the hover state, the pointer cursor, and
+    -- its tooltip next to the cursor (the host anchors tooltips under their node).
+    table.insert(rows, ui.row({ align = "center", gap = 8, height = ROW_HEIGHT }, {
       ui.label({ text = range, flexGrow = 1, color = session.open and "primary" or nil }),
       ui.label({ text = Format.duration((session.endS - session.startS) * 1000, fmt), fontWeight = "bold" }),
+      Widgets.editButton(host.tr("panel.today.edit"), function()
+        openEditor(snap.today.date)
+      end),
+    }))
+  end
+  local earlier = #sessions - MAX_SESSIONS
+  if earlier > 0 then
+    table.insert(rows, ui.row({ align = "center", height = ROW_HEIGHT }, {
+      ui.label({ text = host.trp("panel.today.earlier", earlier), flexGrow = 1, fontSize = 12, color = "on_surface_variant" }),
+      smallButton(host.tr("panel.today.edit"), "ghost", function()
+        openEditor(snap.today.date)
+      end),
     }))
   end
   table.insert(children, ui.column({ gap = ROW_GAP }, rows))
-  return ui.column({ gap = 8 }, children)
+  return ui.column({ gap = 8 }, children), TIMELINE_HEIGHT + 8 + #rows * (ROW_HEIGHT + ROW_GAP)
 end
 
 -- Automation (spec §7.4.6) --------------------------------------------------------------
@@ -566,9 +689,7 @@ local function footer(snap: Snapshot): UiNode
   })
 end
 
-local function sectionTitle(text: string): UiNode
-  return ui.label({ text = text, fontWeight = "medium" })
-end
+local sectionTitle = Widgets.sectionTitle
 
 local function backendRow(glyph: string, name: string, health: Types.BackendHealth): UiNode
   local failing = health == "error" or health == "unavailable"
@@ -629,6 +750,7 @@ local function automationDetails(snap: Snapshot): { UiNode }
     ui.column({ gap = ROW_GAP }, {
       backendRow("keyboard", "idle", automation.backends.idle),
       backendRow("lock", "logind", automation.backends.logind),
+      backendRow("beach", "holidays", automation.backends.holidays),
     }),
     sectionTitle(host.tr("panel.automation.preview")),
     previewStrip(snap),
@@ -652,7 +774,134 @@ local function automationDetails(snap: Snapshot): { UiNode }
   return children
 end
 
+-- Tabs (spec §7.4.5) and the day editor ---------------------------------------------------
+
+local TABS = { "today", "history", "balance" }
+
+-- Asks the core for the days a view shows, once per range.
+local function requestHistory(from: string, to: string)
+  local range = from .. ".." .. to
+  if requested ~= range then
+    requested = range
+    sender.send({ type = "history.get", from = from, to = to })
+  end
+end
+
+-- The day of `shift.history`, nil when it is not there yet.
+local function historyDay(date: string): Types.DaySummary?
+  if history then
+    for _, day in history.days do
+      if day.date == date then
+        return day
+      end
+    end
+  end
+  return nil
+end
+
+function openEditor(date: string)
+  editor = Editor.new(date)
+  detailsOpen = false
+  render()
+end
+
+-- Shows a tab, closing any page; `page` opens one of the Balance tab's pages.
+function openTab(name: string, page: BalanceView.BalancePage?)
+  if name == "history" and tab ~= "history" and snapshot then
+    historyState.anchor = snapshot.today.date
+  end
+  tab = name
+  editor = nil
+  detailsOpen = false
+  balanceState.page = page
+  render()
+end
+
+-- Fixed under the header, on every tab and page: a tab closes the open page.
+local function tabBar(): UiNode
+  local buttons = {}
+  for _, name in TABS do
+    table.insert(buttons, ui.button({
+      text = host.tr("panel.tabs." .. name),
+      variant = tab == name and "secondary" or "ghost",
+      controlSize = "sm",
+      flexGrow = 1,
+      onClick = function()
+        openTab(name)
+      end,
+    }))
+  end
+  return ui.row({ gap = 4, padding = 3, radius = RADIUS, fill = "surface_variant" }, buttons)
+end
+
+local function viewOf(snap: Snapshot, live: Live, nowS: number): Widgets.View
+  return {
+    host = host,
+    snap = snap,
+    live = live,
+    nowS = nowS,
+    send = send,
+    render = render,
+    trackingStart = balanceInfo and balanceInfo.trackingStart,
+    openEditor = openEditor,
+    closeEditor = function()
+      editor = nil
+      render()
+    end,
+  }
+end
+
+-- The tab's content, and its estimated height on the Today tab (0 on the others).
+local function tabContent(view: Widgets.View): (UiNode, number)
+  if tab == "history" then
+    if historyState.anchor == "" then
+      historyState.anchor = view.snap.today.date
+    end
+    requestHistory(History.range(historyState))
+    return History.render(view, historyState, history), 0
+  elseif tab == "balance" then
+    return BalanceView.render(view, balanceState, balanceInfo), 0
+  end
+  return today(view.snap, view.nowS)
+end
+
 -- Panel ----------------------------------------------------------------------------------
+
+-- The host does not re-flow siblings, nor resize a scroll, when the tree's structure
+-- changes in an open panel (a card removed, a session added). Keying the root by its
+-- structure (node types, child counts and keys) makes it build a fresh tree then, while
+-- per-second updates and typing keep the same key.
+local function structureOf(node: UiNode, out: { string })
+  table.insert(out, node.type)
+  local key = node.props and node.props.key
+  if key then
+    table.insert(out, "#" .. tostring(key))
+  end
+  if node.props and node.props.visible == false then
+    table.insert(out, "!")
+  end
+  local children = node.children or {}
+  if #children > 0 then
+    table.insert(out, "(")
+    for _, child in children do
+      structureOf(child, out)
+    end
+    table.insert(out, ")")
+  end
+end
+
+local function structureKey(nodes: { UiNode }): string
+  local out = {}
+  for _, node in nodes do
+    structureOf(node, out)
+  end
+  local text = table.concat(out, " ")
+  local hash = 5381
+  for i = 1, #text do
+    hash = (hash * 33 + string.byte(text, i)) % 4294967296
+  end
+  return string.format("%x-%d", hash, #text)
+end
 
 function render()
   if not snapshot then
@@ -666,50 +915,52 @@ function render()
   local nowMs = host.nowMs()
   local nowS = nowMs // 1000
   local live = Model.live(snap, nowMs)
+  local view = viewOf(snap, live, nowS)
 
-  local children = { header(snap, nowS), statusChip(snap, live, nowS) }
+  local children = { header(snap, live, nowS), tabBar() }
   if commandError then
-    table.insert(children, ui.label({ text = commandError, color = "error", fontSize = 12 }))
+    table.insert(children, ui.label({ text = commandError, color = "error", fontSize = 12, maxLines = 2 }))
   end
 
-  -- The body scrolls between the fixed status and footer.
+  -- A page (the day editor, a balance form, the automation details) replaces the body;
+  -- otherwise the cards, the hero and the tab, with the tiles on Today. Both are laid out
+  -- to fit the panel: the scroll only takes over with unusual content (many sessions).
   local body
-  local cards = {}
   if detailsOpen then
     body = automationDetails(snap)
+  elseif editor then
+    local day = historyDay(editor.date)
+    if not day then
+      local monday = Time.weekStart(editor.date)
+      requestHistory(monday, Time.addDays(monday, 6))
+    end
+    body = Editor.render(view, editor, day)
+  elseif tab == "balance" and balanceState.page then
+    body = BalanceView.page(view, balanceState, balanceInfo)
   else
-    cards = attentionCards(snap, nowS)
-    body = table.clone(cards)
+    body = attentionCards(snap, nowS)
+    local content, contentHeight = tabContent(view)
+    -- The full hero is for the Today tab, when it fits: the cards, the tiles and the
+    -- sessions come first. The welcome card is tall: the compact hero leaves it room.
+    local room = BODY_HEIGHT - cardsHeight(body) - (HERO_HEIGHT + BODY_GAP) - (TILES_HEIGHT + BODY_GAP) - contentHeight
+    if commandError then
+      room -= ERROR_HEIGHT
+    end
+    local full = tab == "today" and not snap.flags.firstRun and room >= 0
     if snap.flags.firstRun then
       table.insert(body, welcomeCard(snap))
     end
-    table.insert(body, hero(snap, live))
-    if not snap.flags.firstRun then
-      table.insert(body, stats(snap, live))
+    table.insert(body, if full then hero(snap, live) else compactHero(snap, live))
+    if tab == "today" then
+      table.insert(body, tiles(snap, live))
     end
-    table.insert(body, ui.separator({}))
-    table.insert(body, today(snap, nowS))
+    table.insert(body, content)
   end
   table.insert(children, ui.scroll({ flexGrow = 1, gap = 12 }, body))
   table.insert(children, ui.separator({}))
   table.insert(children, footer(snap))
 
-  -- The host does not re-flow siblings, nor resize a scroll, when the tree's structure
-  -- changes in an open panel (a card removed, a session added). Keying the root by its
-  -- structure makes it build a fresh tree then; per-second updates keep the same key.
-  local structure = table.concat({
-    tostring(snap.flags.firstRun),
-    tostring(commandError ~= nil),
-    tostring(detailsOpen),
-    tostring(#cards),
-    tostring(snap.suggestion),
-    tostring(#snap.pending),
-    tostring(#snap.automation.ruleErrors),
-    tostring(#snap.today.sessions),
-    tostring(#snap.today.absences),
-    tostring(snap.today.openStartMs ~= nil),
-  }, "|")
-  panel.render(ui.column({ key = structure, gap = 12, flexGrow = 1 }, children))
+  panel.render(ui.column({ key = structureKey(children), gap = 12, flexGrow = 1 }, children))
 end
 
 host.state.watch("shift.snapshot", function(value)
@@ -719,8 +970,25 @@ host.state.watch("shift.snapshot", function(value)
   end
 end)
 
+host.state.watch("shift.history", function(value)
+  history = value
+  if isOpen then
+    render()
+  end
+end)
+
+host.state.watch("shift.balance", function(value)
+  balanceInfo = value
+  if isOpen then
+    render()
+  end
+end)
+
 function onOpen()
   isOpen = true
+  -- Each open starts on Today, where the check-in button is.
+  tab = "today"
+  requested = nil -- the core may have restarted since the last request
   panel.setWantsSecondTicks(true)
   render()
 end
@@ -729,6 +997,8 @@ function onClose()
   isOpen = false
   commandError = nil
   detailsOpen = false
+  editor = nil
+  balanceState.page = nil
 end
 
 function update()

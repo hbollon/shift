@@ -2,7 +2,7 @@
 
 Track your working hours from the Noctalia shell: one-click check in / check out, a live daily counter against your
 contract, and an overtime balance you can adjust. Automation can suggest or do check-ins within your work hours, and
-asks what to do with the time you were away. Shift is under active development: history and the balance are coming.
+asks what to do with the time you were away. Shift is under active development.
 
 ## Plugin
 
@@ -25,10 +25,18 @@ asks what to do with the time you were away. Shift is under active development: 
   target; hover it for the details.
   - Left click: open the dashboard.
   - Right click: check in, or check out when working.
-- **Dashboard panel**: today's counter and target, the check in / check out button, this week's total and today's
-  sessions. Cards at the top ask about absences and suggestions; the footer summarises automation, and its details
-  show the signal sources and this week's work hours. Recent actions can be undone for 10 minutes (header button or
-  `Ctrl+Z`). It opens from the bar widget or the control-center tile, or with:
+- **Dashboard panel**: today's counter and target, the check in / check out button, and three tabs:
+  - **Today**: this week's total, the balance and today's delta, then the day's timeline and sessions;
+  - **History**: a week of bars against the target, or a month calendar; click a day to edit it;
+  - **Balance**: the balance until yesterday and its breakdown, adjustments (time off, corrections), and the tracking
+    start and initial balance.
+
+  The day editor changes a day's sessions (times like `9:30`, `930`, `9h30` or `9.5`), including the start of the
+  running one, and marks days off (no target), ahead of time too. Cards at the top ask about absences, suggestions,
+  days closed automatically and days without sessions: such a day stays out of the balance until you review it (day
+  off, add a session, or not worked). The footer summarises automation, and its details show the signal sources and
+  this week's work hours. Recent actions can be undone for 10 minutes (header button or `Ctrl+Z`). It opens from the
+  bar widget or the control-center tile, or with:
 
   ```sh
   noctalia msg panel-toggle hbollon/shift:dashboard
@@ -44,8 +52,18 @@ asks what to do with the time you were away. Shift is under active development: 
   noctalia msg plugin hbollon/shift:core all toggle
   noctalia msg plugin hbollon/shift:core all undo
   noctalia msg plugin hbollon/shift:core all resolve keep     # or remove: the oldest absence to review
+  noctalia msg plugin hbollon/shift:core all adjust -2:00 Dentist   # a balance adjustment dated today
+  noctalia msg plugin hbollon/shift:core all dayoff 2026-12-24 # toggle a day off (today without a date)
+  noctalia msg plugin hbollon/shift:core all holidays-refresh # fetch the public holidays again
   noctalia msg plugin hbollon/shift:core all signal idle      # idle, active, lock, unlock, sleep, resume
   ```
+
+### Balance
+
+Your weekly hours are split evenly over your workdays (35 h over Monday–Friday is 7:00 a day). Public holidays and
+days off have no target; time worked on them is overtime. A change of contract applies from the day you make it, never
+to past days. The balance counts every day from the tracking start to yesterday, plus the initial balance and the
+adjustments; today's delta is shown apart until the day ends.
 
 ### Automation
 
@@ -90,7 +108,7 @@ listener {
 | Duration format | 7:30 | How durations are displayed: `7:30`, `7h 30m` or `7.50 h`. |
 | Automation | Assisted | Manual, Assisted (suggests check-ins and check-outs, asks about absences), Automatic (checks in and out for you, asks about absences) or Custom. |
 | Work hours start / end | 08:00 / 19:00 | The automation window on your workdays (`24:00` allowed as the end). |
-| Not on public holidays | On | Public holidays are outside the work hours (holidays are not fetched yet). |
+| Not on public holidays | On | Public holidays and days off are outside the work hours. |
 | Additional rules | none | Rules that add or remove time from the work hours (see Automation above). |
 | Check in / Check out | Suggest | Custom only: off, suggest, or automatically. |
 | When inactive / locked / asleep or offline | Ask me | Custom only: count it as work, ask me, remove it, or check out. |
@@ -98,6 +116,9 @@ listener {
 | Shortest absence (minutes) | 15 | Shorter breaks count as work. |
 | Unreviewed absences | Count them as work | Advanced. What happens at the end of the day to absences you did not review. |
 | Idle detection | Auto | Advanced. Auto (swayidle when installed), swayidle, External (IPC) or Off. |
+| Public holidays | On | No target on public holidays. Fetched from date.nager.at (see Notes). |
+| Holiday country | from your locale | Two-letter country code, such as `FR`; empty reads it from `LC_TIME` / `LANG`. |
+| Holiday region | none | Advanced. A subdivision code for regional holidays, such as `FR-67` or `DE-BY`. |
 
 Each bar widget also has its own settings (middle-click the widget to open them):
 
@@ -111,9 +132,14 @@ Each bar widget also has its own settings (middle-click the widget to open them)
 
 The `core` service starts automatically when the plugin is enabled. Shift stores its data as JSON files in
 `~/.local/state/noctalia/plugins/data/hbollon/shift/` (`state.json`, `balance.json` and one `ledger/<year>.json` per
-year), plus generated progress-ring images in `cache/`. Disabling or removing the plugin never deletes them.
+year), plus cached public holidays in `holidays/` and generated progress-ring images in `cache/`. Disabling or
+removing the plugin never deletes them.
 
-Shift does not access the network yet. Unless automation is set to Manual, the service runs these processes:
+Shift's only network access is the public holidays: `GET https://date.nager.at/api/v3/PublicHolidays/<year>/<country>`
+for each year from the tracking start to next year, once for past years and at most once a week for the current and
+next ones. It honors Noctalia's offline mode and uses the cache when offline. Turn *Public holidays* off to disable it.
+
+Unless automation is set to Manual, the service runs these processes:
 
 - `swayidle -w timeout <minutes × 60> 'echo idle' resume 'echo active'`, for idle detection;
 - `gdbus monitor --system --dest org.freedesktop.login1`, and `gdbus call` once at startup to find the session and its
