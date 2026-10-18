@@ -27,6 +27,10 @@ local COUNTER_ROOM = HERO_RING - 2 * HERO_STROKE - 24
 local UNIT_SCALE = 0.55 -- unit letters next to the counter's numbers
 local SECONDS_SIZE = 16
 local COUNTER_GAP = 2
+-- A label's text baseline sits this many font sizes above the bottom of its box (half of
+-- line height minus cap height, DejaVu-like metrics), so a small label next to a large one
+-- in a bottom-aligned row is raised by this ratio of their size difference.
+local BASELINE_RATIO = 0.22
 local DETAIL_SIZE = 13
 local RADIUS = 12
 local ROW_HEIGHT = 22
@@ -322,8 +326,12 @@ local function counter(ms: number, fmt: Types.DurationFormat): (UiNode, number)
   local parts = Format.parts(Format.duration(ms, fmt))
   local seconds = fmt == "colon" and string.format(":%02d", ms // 1000 % 60) or nil
   local scaled, labels = 0, #parts
+  -- The space between parts follows the unit, at its smaller size.
+  local function unitText(index: number): string
+    return parts[index].unit .. (index < #parts and " " or "")
+  end
   for index, part in parts do
-    scaled += ems((index > 1 and " " or "") .. part.number) + ems(part.unit) * UNIT_SCALE
+    scaled += ems(part.number) + ems(unitText(index)) * UNIT_SCALE
     labels += if part.unit ~= "" then 1 else 0
   end
   local fixed = 0
@@ -334,15 +342,20 @@ local function counter(ms: number, fmt: Types.DurationFormat): (UiNode, number)
   fixed += (labels - 1) * COUNTER_GAP
   local size = math.clamp(math.floor((COUNTER_ROOM - fixed) / scaled), COUNTER_MIN, COUNTER_SIZE)
 
+  -- Labels share the large numbers' baseline: smaller ones stand on a spacer.
+  local function small(props)
+    local lift = math.round((size - props.fontSize) * BASELINE_RATIO)
+    return ui.column({ gap = 0 }, { ui.label(props), ui.box({ height = lift, opacity = 0 }) })
+  end
   local nodes = {}
   for index, part in parts do
-    table.insert(nodes, ui.label({ text = (index > 1 and " " or "") .. part.number, fontSize = size, fontWeight = "bold" }))
+    table.insert(nodes, ui.label({ text = part.number, fontSize = size, fontWeight = "bold" }))
     if part.unit ~= "" then
-      table.insert(nodes, ui.label({ text = part.unit, fontSize = math.round(size * UNIT_SCALE), fontWeight = "bold" }))
+      table.insert(nodes, small({ text = unitText(index), fontSize = math.round(size * UNIT_SCALE), fontWeight = "bold" }))
     end
   end
   if seconds then
-    table.insert(nodes, ui.label({ text = seconds, fontSize = SECONDS_SIZE, color = "on_surface_variant" }))
+    table.insert(nodes, small({ text = seconds, fontSize = SECONDS_SIZE, color = "on_surface_variant" }))
   end
   return ui.row({ align = "end", gap = COUNTER_GAP }, nodes), size
 end
