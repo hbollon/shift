@@ -16,6 +16,7 @@ type DaySummary = Types.DaySummary
 type Live = Types.Live
 type Status = Types.Status
 type Session = Types.Session
+type Settled = Types.Settled
 type Settings = Types.Settings
 type Snapshot = Types.Snapshot
 type State = Types.State
@@ -272,15 +273,13 @@ function Model.daySummary(dateKey: string, book: Book, today: string): DaySummar
   }
 end
 
--- The settled balance on `today` (spec §6.6): the initial balance, plus worked minus
--- target for every day from tracking start to yesterday that is not an unreviewed
--- missing day, plus every adjustment.
-function Model.balance(book: Book, today: string): BalanceSummary
-  local balance = book.balance
+-- Worked minus target over the days in [from, to), all before today, leaving out the
+-- unreviewed missing days (spec §6.6).
+function Model.settle(book: Book, from: string, to: string): Settled
   local delta, toReview, needsReview = 0, {}, {}
-  local date = balance.trackingStart
-  while date < today do
-    local summary = Model.daySummary(date, book, today)
+  local date = from
+  while date < to do
+    local summary = Model.daySummary(date, book, to)
     if summary.missing then
       table.insert(toReview, date)
     else
@@ -291,19 +290,31 @@ function Model.balance(book: Book, today: string): BalanceSummary
     end
     date = Time.addDays(date, 1)
   end
+  return { deltaMs = delta, toReview = toReview, needsReview = needsReview }
+end
+
+-- The settled balance from the settled days: plus the initial balance and every
+-- adjustment.
+function Model.balanceOf(balance: Balance, settled: Settled): BalanceSummary
   local adjustments = 0
   for _, adjustment in balance.adjustments do
     adjustments += adjustment.minutes * MINUTE_MS
   end
   local initial = balance.initialBalanceMin * MINUTE_MS
   return {
-    settledMs = initial + delta + adjustments,
+    settledMs = initial + settled.deltaMs + adjustments,
     initialMs = initial,
-    deltaMs = delta,
+    deltaMs = settled.deltaMs,
     adjustmentsMs = adjustments,
-    toReview = toReview,
-    needsReview = needsReview,
+    toReview = settled.toReview,
+    needsReview = settled.needsReview,
   }
+end
+
+-- The settled balance on `today` (spec §6.6): every day from tracking start to yesterday.
+-- The service keeps it by month instead (lib/totals.luau).
+function Model.balance(book: Book, today: string): BalanceSummary
+  return Model.balanceOf(book.balance, Model.settle(book, book.balance.trackingStart, today))
 end
 
 -- Day editor (spec §6.8.2, §6.8.3) --------------------------------------------------
@@ -498,7 +509,7 @@ export type SnapshotContext = {
   nowS: number,
   settings: Settings,
   book: Book,
-  balance: BalanceSummary, -- Model.balance(book, today), cached by the service
+  balance: BalanceSummary?, -- the service's, nil while it computes it
   automation: Types.SnapshotAutomation,
 }
 
@@ -567,7 +578,7 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
       absences = absences,
     },
     week = { workedMs = weekWorked, targetMs = weekTarget },
-    balance = { settledMs = ctx.balance.settledMs, toReview = ctx.balance.toReview },
+    balance = ctx.balance and { settledMs = ctx.balance.settledMs, toReview = ctx.balance.toReview },
     pending = pending,
     suggestion = suggestion and suggestion.kind or nil,
     undo = undo and { id = undo.id, action = undo.action, kind = undoKind(undo), atS = undo.atS, date = (undo :: any).date } or nil,
@@ -578,7 +589,7 @@ function Model.snapshot(ctx: SnapshotContext): Snapshot
       dailyTargetMs = Model.dailyTargetMs(settings),
       dayStartHour = settings.dayStartHour,
     },
-    flags = { firstRun = not ctx.state.firstRunDismissed, needsReview = ctx.balance.needsReview },
+    flags = { firstRun = not ctx.state.firstRunDismissed, needsReview = ctx.balance and ctx.balance.needsReview or {} },
     display = { durationFormat = settings.durationFormat },
   }
 end

@@ -128,6 +128,13 @@ export type DaySummary = {
   sessions: { Session },
 }
 
+-- Worked minus target over a range of days (Model.settle), and the days it leaves out.
+export type Settled = {
+  deltaMs: number,
+  toReview: { string }, -- unreviewed missing days, oldest first
+  needsReview: { string }, -- days closed by the rollover, oldest first
+}
+
 -- The settled balance (spec §6.6): today excluded, missing days left out until reviewed.
 export type BalanceSummary = {
   settledMs: number,
@@ -214,7 +221,7 @@ export type Snapshot = {
     absences: { { startS: number, endS: number } }, -- pending, in order
   },
   week: { workedMs: number, targetMs: number }, -- closed sessions; UIs add the open one
-  balance: { settledMs: number, toReview: { string } },
+  balance: { settledMs: number, toReview: { string } }?, -- nil while the service computes it
   pending: { { id: string, startS: number, endS: number, signal: AwaySignal } }, -- oldest first
   suggestion: "checkin" | "checkout" | nil,
   -- nil once older than the undo window; `kind` names the label ("checkout", "day_off"…)

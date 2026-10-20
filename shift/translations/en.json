@@ -86,7 +86,8 @@
       "week": "This week",
       "today": "Today",
       "balance": "Balance",
-      "with_today": "Balance with today, if the day ended now"
+      "with_today": "Balance with today, if the day ended now",
+      "computing": "Computing the balance over your history…"
     },
     "today": {
       "empty": "No sessions yet today.",

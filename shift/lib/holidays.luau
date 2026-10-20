@@ -23,6 +23,8 @@ export type Config = {
 export type Monitor = {
   configure: (config: Config) -> (),
   holiday: (dateKey: string) -> string?,
+  -- Every known holiday, by date (not to be modified).
+  dates: () -> { [string]: string },
   health: () -> Types.BackendHealth,
   -- The one-time hint to show: holidays are unavailable and nothing is cached.
   hint: () -> string?,
@@ -199,6 +201,10 @@ function Holidays.start(host: Host, onChange: () -> ()): Monitor
 
   function monitor.holiday(dateKey: string): string?
     return byDate[dateKey]
+  end
+
+  function monitor.dates(): { [string]: string }
+    return byDate
   end
 
   function monitor.health(): Types.BackendHealth

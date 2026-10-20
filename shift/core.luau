@@ -16,6 +16,7 @@ local Ring = require("./lib/ring.luau")
 local Rules = require("./lib/rules.luau")
 local Store = require("./lib/store.luau")
 local Time = require("./lib/time.luau")
+local Totals = require("./lib/totals.luau")
 local Types = require("./lib/types.luau")
 
 local SNAPSHOT_KEY = "shift.snapshot"
@@ -32,6 +33,12 @@ local GAP_S = 3 * TICK_MS // 1000 + 30
 local STALE_HEARTBEAT_S = 2 * 60
 -- A backward clock jump larger than this is logged (E7).
 local BACKWARD_SLACK_S = 30
+-- Wall time the settled balance may take per call, at load and afterwards (the CPU budget
+-- is 100 ms and 25 ms). With a long history, the ticks come every CATCH_UP_MS until it is
+-- computed (lib/totals.luau).
+local LOAD_SLICE_MS = 40
+local SLICE_MS = 8
+local CATCH_UP_MS = 100
 
 local host = Host.new()
 local store = Store.new(host)
@@ -71,6 +78,7 @@ end
 
 -- What targets and the balance read; `balance` is replaced on every change.
 local book: Types.Book = { balance = balance, dayOf = dayOf, holiday = holidayOf }
+local totals = Totals.new(book, os.clock)
 
 -- Automation window ---------------------------------------------------------------
 
@@ -153,6 +161,8 @@ end
 local summary: Types.BalanceSummary? = nil
 local summaryDay: string? = nil
 local historyRange: { from: string, to: string }? = nil
+local sliceMs = LOAD_SLICE_MS
+local catchingUp = false -- the settled balance is still being computed
 
 -- `calendar` when days off or holidays may have changed: the window preview shows them.
 local function invalidate(calendar: boolean?)
@@ -176,12 +186,19 @@ local function publishHistory()
   host.state.set(HISTORY_KEY, info)
 end
 
-local function balanceSummary(): Types.BalanceSummary
+local function balanceSummary(): Types.BalanceSummary?
   local day = today()
   if summary and summaryDay == day then
     return summary
   end
-  local computed = Model.balance(book, day)
+  local computed = totals.summary(day, sliceMs)
+  if catchingUp ~= (computed == nil) then
+    catchingUp = computed == nil
+    host.setUpdateInterval(if catchingUp then CATCH_UP_MS else TICK_MS)
+  end
+  if not computed then
+    return nil
+  end
   summary, summaryDay = computed, day
   local info: Types.BalanceInfo = {
     trackingStart = balance.trackingStart,
@@ -266,6 +283,7 @@ end
 local function apply(effects: { Types.Effect })
   for _, effect in effects do
     if string.sub(effect.type, 1, 7) == "ledger." then
+      totals.changed(effect.date)
       invalidate(effect.type == "ledger.setFlag" or effect.type == "ledger.setDay")
     end
     if effect.type == "ledger.addSession" then
@@ -350,7 +368,20 @@ syncContract()
 -- Holidays change targets and the window: both are evaluated afresh, by the next tick,
 -- since a configuration change can happen while effects are being applied.
 local calendarChanged = false
+local holidayDates: { [string]: string } = {}
 holidays = Holidays.start(host, function()
+  local dates = holidays and holidays.dates() or {}
+  for date, name in dates do
+    if holidayDates[date] ~= name then
+      totals.changed(date)
+    end
+  end
+  for date in holidayDates do
+    if dates[date] == nil then
+      totals.changed(date)
+    end
+  end
+  holidayDates = table.clone(dates)
   invalidate(true)
   calendarChanged = true
 end)
@@ -436,7 +467,8 @@ Commands.receiver(host, function(cmd)
   return dispatch(event)
 end)
 
-host.setUpdateInterval(TICK_MS)
+sliceMs = SLICE_MS
+host.setUpdateInterval(if catchingUp then CATCH_UP_MS else TICK_MS)
 
 -- Host callbacks ---------------------------------------------------------------------
 
@@ -469,8 +501,9 @@ function update()
   if now - lastSaveS >= HEARTBEAT_S then
     saveState()
   end
-  -- Once a minute, so counters roll over to a new workday and week.
-  if now // 60 ~= lastPublishMinute then
+  -- Once a minute, so counters roll over to a new workday and week; on every tick while the
+  -- settled balance is being computed.
+  if catchingUp or now // 60 ~= lastPublishMinute then
     publish()
   end
 end

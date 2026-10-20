@@ -876,6 +876,7 @@ unit-testable with the standalone `luau` CLI.
 | `lib/time.luau` | ✓ | Workday math, ISO weeks, DST-safe helpers, parsing/formatting of times and durations |
 | `lib/rules.luau` | ✓ | Rule DSL parser, validator, `window(t)`, segment iteration, 7 × 24 preview |
 | `lib/model.luau` | ✓ | Sessions/absences ops, invariants, counters, targets, balance, contract history |
+| `lib/totals.luau` | ✓ | Settled balance kept by month: computed again by month on changes, spread over calls (§9.4) |
 | `lib/automation.luau` | ✓ | Reducer `(state, event, config, now) → (state', effects)` for check-in/out, absences, overrides, rollover |
 | `lib/store.luau` | – | Load/save, atomic writes, schema migrations, backups |
 | `lib/signals/stream.luau` | – | Long-lived command wrapper: process group, exit detection, restarts with backoff, stop |
@@ -910,7 +911,7 @@ deterministic and fully testable with a fake clock.
     absences = { { startS = 1791540720, endS = 1791543240 } }, -- today's pending absences, for the timeline
   },
   week = { workedMs = 101400000, targetMs = 126000000 }, -- closed sessions; UIs add the open one
-  balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days
+  balance = { settledMs = 16500000, toReview = { "2026-10-02" } }, -- unreviewed missing days; nil while computed
   pending = { { id = "a_8f2c", startS = 1791540720, endS = 1791543240, signal = "lock" } }, -- strongest signal
   suggestion = nil,            -- "checkin" | "checkout"
   undo = { id = "checkout:s_tmn2rc", action = "checkout", kind = "checkout", atS = 1791558120, date = nil },
@@ -937,7 +938,7 @@ publishes it again whenever the data changes.
 
 **`shift.balance`** (service → UIs), published whenever the balance changes: `{ trackingStart, initialBalanceMin,
 adjustments, initialMs, deltaMs, adjustmentsMs, settledMs, toReview }`, for the Balance tab. The balance is computed
-again only after a change of the data or of the day.
+again only after a change of the data or of the day, and only for the months that changed (§9.4).
 
 **`shift.cmd`** (UIs → service). Every UI runtime is a sender with a unique id `from` (entry kind, load time
 and a random number, e.g. `bar.19a1208aa73b-5f3a9c`, so two bar widgets or a reloaded widget never collide). A sender publishes the list of its
@@ -981,6 +982,10 @@ The panel shows inline errors from `shift.ack`.
   iteration (about 0.5 µs each): a callback costs mostly what it calls and loops. The window preview evaluates each
   day's rules once and is rebuilt only when days off or holidays change; the panel caches formatted dates and keeps its
   structure key short.
+- The settled balance is kept by month (`lib/totals.luau`): a full pass costs about 12 ms per year of data. A past
+  month is computed again only when one of its days, its holidays or its contract changes, or the tracking start moves
+  into it. When the months do not fit in one call (at most 40 ms of wall time at load, 8 ms afterwards), the next ticks
+  come every 100 ms until they are done; meanwhile the snapshot has no `balance` and the Balance tile shows `…`.
 - Target: < 0.1 % CPU when idle, and no measurable impact on shell frame times.
 
 ## 10. Data model and persistence

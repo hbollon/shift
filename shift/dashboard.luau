@@ -247,7 +247,7 @@ local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
       end),
     }))
   end
-  local toReview = snap.balance.toReview
+  local toReview = snap.balance and snap.balance.toReview or {}
   if #toReview > 0 then
     table.insert(cards, card("calendar-question", host.trp("panel.attention.to_review", #toReview), {
       smallButton(host.tr("panel.attention.review"), "outline", function()
@@ -503,30 +503,37 @@ local function tiles(snap: Snapshot, live: Live): UiNode
   if live.weekTargetMs > 0 then
     weekProgress = ui.progress({ progress = math.min(1, live.weekWorkedMs / live.weekTargetMs), height = 4, radius = 2 })
   end
-  local settled = snap.balance.settledMs
   local delta = live.workedMs - live.targetMs
   -- Where today takes the balance if the day ended now: up, flat or down, in fixed colors
-  -- that read the same with every theme.
-  local glyph, color = "arrow-right", TREND_COLORS.flat
-  if delta >= 60000 then
-    glyph, color = "trending-up", TREND_COLORS.up
-  elseif delta <= -60000 then
-    glyph, color = "trending-down", TREND_COLORS.down
-  end
-  -- The value alone fits the tile with any format; the tooltip says what it is.
-  local trend = ui.row({ align = "center", gap = 4 }, {
-    ui.glyph({ name = glyph, size = 12, color = color }),
-    ui.label({ text = Format.signed(settled + delta, fmt), fontSize = 12, color = color, maxLines = 1 }),
-  })
-  return ui.row({ gap = 8 }, {
-    tile(host.tr("panel.stats.week"), week, nil, weekProgress),
-    tile(
+  -- that read the same with every theme. Without a balance yet (a long history at
+  -- startup), the tile waits for it.
+  local balanceTile
+  if snap.balance then
+    local settled = snap.balance.settledMs
+    local glyph, color = "arrow-right", TREND_COLORS.flat
+    if delta >= 60000 then
+      glyph, color = "trending-up", TREND_COLORS.up
+    elseif delta <= -60000 then
+      glyph, color = "trending-down", TREND_COLORS.down
+    end
+    -- The value alone fits the tile with any format; the tooltip says what it is.
+    local trend = ui.row({ align = "center", gap = 4 }, {
+      ui.glyph({ name = glyph, size = 12, color = color }),
+      ui.label({ text = Format.signed(settled + delta, fmt), fontSize = 12, color = color, maxLines = 1 }),
+    })
+    balanceTile = tile(
       host.tr("panel.stats.balance"),
       Format.signed(settled, fmt),
       settled >= 60000 and "tertiary" or nil,
       trend,
       host.tr("panel.stats.with_today")
-    ),
+    )
+  else
+    balanceTile = tile(host.tr("panel.stats.balance"), "…", "on_surface_variant", nil, host.tr("panel.stats.computing"))
+  end
+  return ui.row({ gap = 8 }, {
+    tile(host.tr("panel.stats.week"), week, nil, weekProgress),
+    balanceTile,
     tile(host.tr("panel.stats.today"), Format.signed(delta, fmt), delta >= 60000 and "tertiary" or nil, nil),
   })
 end
