@@ -194,29 +194,43 @@ end
 
 -- Evaluation ---------------------------------------------------------------------
 
-local function matches(rule: Rule, key: string, weekday: number, minute: number, calendar: Calendar): boolean
-  if minute < rule.startMin or minute >= rule.endMin then
-    return false
-  end
-  if rule.kind == "all" then
-    return true
-  elseif rule.kind == "days" then
-    return (rule.days :: { boolean })[weekday] == true
-  elseif rule.kind == "dates" then
-    return key >= (rule.from :: string) and key <= (rule.to :: string)
-  end
-  return calendar.isHoliday(key)
-end
-
--- Whether a local calendar date and minute of the day is inside the window.
-function Rules.inside(compiled: Compiled, key: string, minute: number, calendar: Calendar): boolean
+-- Rules that apply on a date, with its day off, weekday and holiday looked up once; nil on
+-- a day off.
+local function rulesOn(compiled: Compiled, key: string, calendar: Calendar): { Rule }?
   if calendar.isDayOff(key) then
-    return false
+    return nil
   end
   local weekday = Time.weekday(key)
-  local included = false
+  local holiday: boolean? = nil
+  local applying = {}
   for _, rule in compiled.rules do
-    if matches(rule, key, weekday, minute, calendar) then
+    local applies
+    if rule.kind == "all" then
+      applies = true
+    elseif rule.kind == "days" then
+      applies = (rule.days :: { boolean })[weekday] == true
+    elseif rule.kind == "dates" then
+      applies = key >= (rule.from :: string) and key <= (rule.to :: string)
+    else
+      if holiday == nil then
+        holiday = calendar.isHoliday(key)
+      end
+      applies = holiday
+    end
+    if applies then
+      table.insert(applying, rule)
+    end
+  end
+  return applying
+end
+
+local function insideOn(applying: { Rule }?, minute: number): boolean
+  if not applying then
+    return false
+  end
+  local included = false
+  for _, rule in applying do
+    if minute >= rule.startMin and minute < rule.endMin then
       if not rule.include then
         return false
       end
@@ -224,6 +238,11 @@ function Rules.inside(compiled: Compiled, key: string, minute: number, calendar:
     end
   end
   return included
+end
+
+-- Whether a local calendar date and minute of the day is inside the window.
+function Rules.inside(compiled: Compiled, key: string, minute: number, calendar: Calendar): boolean
+  return insideOn(rulesOn(compiled, key, calendar), minute)
 end
 
 function Rules.at(compiled: Compiled, epochS: number, calendar: Calendar): boolean
@@ -271,12 +290,12 @@ end
 function Rules.preview(compiled: Compiled, weekStart: string, calendar: Calendar): { string }
   local days = {}
   for offset = 0, 6 do
-    local key = Time.addDays(weekStart, offset)
+    local applying = rulesOn(compiled, Time.addDays(weekStart, offset), calendar)
     local digits = table.create(24)
     for hour = 0, 23 do
       local count = 0
       for quarter = 0, 3 do
-        if Rules.inside(compiled, key, hour * 60 + quarter * 15, calendar) then
+        if insideOn(applying, hour * 60 + quarter * 15) then
           count += 1
         end
       end

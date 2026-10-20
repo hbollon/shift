@@ -154,9 +154,12 @@ local summary: Types.BalanceSummary? = nil
 local summaryDay: string? = nil
 local historyRange: { from: string, to: string }? = nil
 
-local function invalidate()
+-- `calendar` when days off or holidays may have changed: the window preview shows them.
+local function invalidate(calendar: boolean?)
   summary = nil
-  preview = nil
+  if calendar then
+    preview = nil
+  end
 end
 
 local function publishHistory()
@@ -263,7 +266,7 @@ end
 local function apply(effects: { Types.Effect })
   for _, effect in effects do
     if string.sub(effect.type, 1, 7) == "ledger." then
-      invalidate()
+      invalidate(effect.type == "ledger.setFlag" or effect.type == "ledger.setDay")
     end
     if effect.type == "ledger.addSession" then
       addSession(effect.date, effect.session)
@@ -348,7 +351,7 @@ syncContract()
 -- since a configuration change can happen while effects are being applied.
 local calendarChanged = false
 holidays = Holidays.start(host, function()
-  invalidate()
+  invalidate(true)
   calendarChanged = true
 end)
 configureHolidays()
