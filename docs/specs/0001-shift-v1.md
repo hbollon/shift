@@ -979,7 +979,8 @@ The panel shows inline errors from `shift.ack`.
   open only.
 - Each callback has a 25 ms CPU budget, and Noctalia reads the thread CPU clock at every Luau call, return and loop
   iteration (about 0.5 µs each): a callback costs mostly what it calls and loops. The window preview evaluates each
-  day's rules once and is rebuilt only when days off or holidays change.
+  day's rules once and is rebuilt only when days off or holidays change; the panel caches formatted dates and keeps its
+  structure key short.
 - Target: < 0.1 % CPU when idle, and no measurable impact on shell frame times.
 
 ## 10. Data model and persistence

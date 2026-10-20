@@ -74,9 +74,23 @@ local function dateEpoch(dateKey: string): number
   return Time.localToEpoch(year :: number, month :: number, day :: number, 12, 0)
 end
 
+-- Formatted dates by pattern and date key: the history views format dozens per render.
+-- They live as long as the entry, so a change of locale shows after a reload.
+local formatted: { [string]: { [string]: string } } = {}
+
 -- A date in a strftime pattern ("%a %d %b"), in the user's locale.
 function Widgets.date(host: Types.Host, dateKey: string, pattern: string): string
-  return host.formatTime("{:" .. pattern .. "}", dateEpoch(dateKey))
+  local byDate = formatted[pattern]
+  if not byDate then
+    byDate = {}
+    formatted[pattern] = byDate
+  end
+  local text = byDate[dateKey]
+  if not text then
+    text = host.formatTime("{:" .. pattern .. "}", dateEpoch(dateKey))
+    byDate[dateKey] = text
+  end
+  return text
 end
 
 -- ‹ date › stepper, one day per click, bounded by `min`/`max` when given.

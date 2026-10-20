@@ -870,7 +870,9 @@ end
 -- The host does not re-flow siblings, nor resize a scroll, when the tree's structure
 -- changes in an open panel (a card removed, a session added). Keying the root by its
 -- structure (node types, child counts and keys) makes it build a fresh tree then, while
--- per-second updates and typing keep the same key.
+-- per-second updates and typing keep the same key. The key is a counter bumped when the
+-- structure differs from the last render: every node's path includes it, so it stays
+-- short, and Luau compares interned strings in constant time.
 local function structureOf(node: UiNode, out: { string })
   table.insert(out, node.type)
   local key = node.props and node.props.key
@@ -890,17 +892,20 @@ local function structureOf(node: UiNode, out: { string })
   end
 end
 
+local lastStructure: string? = nil
+local structureCount = 0
+
 local function structureKey(nodes: { UiNode }): string
   local out = {}
   for _, node in nodes do
     structureOf(node, out)
   end
-  local text = table.concat(out, " ")
-  local hash = 5381
-  for i = 1, #text do
-    hash = (hash * 33 + string.byte(text, i)) % 4294967296
+  local structure = table.concat(out, " ")
+  if structure ~= lastStructure then
+    lastStructure = structure
+    structureCount += 1
   end
-  return string.format("%x-%d", hash, #text)
+  return tostring(structureCount)
 end
 
 function render()
