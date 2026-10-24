@@ -146,7 +146,7 @@
       "manual_summary": "Manual · automation off",
       "idle": "Idle {minutes} min",
       "window": "{days} {from}–{to}",
-      "no_window": "No window",
+      "no_window": "No work hours",
       "rules": {
         "one": "+{count} rule",
         "other": "+{count} rules"
@@ -166,7 +166,7 @@
         "error": "Failing",
         "off": "Off"
       },
-      "preview": "Window this week",
+      "preview": "Work hours this week",
       "errors": "Invalid settings",
       "error_line": "{setting}: “{text}” — {reason}",
       "error_rule": "Rule {index}",
@@ -192,6 +192,10 @@
       "today": "Back to today",
       "loading": "Loading…",
       "week_total": "Week total"
+    },
+    "date": {
+      "previous": "Previous day",
+      "next": "Next day"
     },
     "day": {
       "back": "Back",
@@ -231,6 +235,8 @@
       "adjustments": "Adjustments",
       "show_all": "Show all ({count})",
       "page": "{page} / {pages}",
+      "previous_page": "Previous page",
+      "next_page": "Next page",
       "no_adjustments": "No adjustments yet.",
       "delete": "Delete adjustment",
       "add_title": "Add adjustment",
@@ -299,26 +305,27 @@
     },
     "style": {
       "label": "Style",
-      "description": "What the widget shows next to today's time.",
+      "description": "What the widget shows next to today’s time.",
       "full": "Icon, time and progress ring",
       "compact": "Icon and time",
       "minimal": "Time only"
     },
     "value": {
       "label": "Value",
+      "description": "The time the widget shows: worked today, or what is left of today’s target.",
       "worked": "Worked today",
       "remaining": "Remaining today"
     },
     "when_off": {
       "label": "When checked out",
-      "description": "Hidden widgets come back at the next check-in; check in from the panel, the control center or IPC.",
+      "description": "How the widget looks while you are checked out. A hidden widget comes back at the next check-in.",
       "show": "Show normally",
       "dim": "Dim",
       "hide": "Hide"
     },
     "automation": {
       "label": "Automation",
-      "description": "Manual: you check in and out yourself. Assisted: Shift suggests check-ins and asks about absences. Automatic: Shift checks you in and out within your work hours.",
+      "description": "Manual: you check in and out yourself. Assisted: Shift suggests check-ins and asks about absences. Automatic: Shift checks you in and out within your work hours. Custom: choose each behavior.",
       "manual": "Manual",
       "assisted": "Assisted",
       "automatic": "Automatic",
@@ -395,7 +402,7 @@
     },
     "holidays_enabled": {
       "label": "Public holidays",
-      "description": "No target on public holidays, and no automatic check-in. Fetched from date.nager.at, the plugin's only network access."
+      "description": "No target on public holidays, and no automatic check-in. Fetched from date.nager.at, the plugin’s only network access."
     },
     "holiday_country": {
       "label": "Holiday country",
@@ -438,23 +445,23 @@
       },
       "corrupt": {
         "title": "Shift data was damaged",
-        "body": "{file} could not be parsed and was renamed with a .corrupt suffix. Shift continues without its contents."
+        "body": "{file} was damaged and set aside as .corrupt. Shift goes on without its contents."
       },
       "restored": {
         "title": "Shift data was restored",
-        "body": "{file} was damaged and has been restored from the backup of {date}. Changes made since then are lost; the damaged file was kept with a .corrupt suffix."
+        "body": "{file} was damaged. Restored from the backup of {date}; later changes to it are lost."
       },
       "migration": {
         "title": "Shift cannot update its data",
-        "body": "{file} is from an older version of Shift and could not be backed up before its update. Nothing will be saved until this is fixed."
+        "body": "Could not back up {file} before its update. Nothing will be saved until this is fixed."
       },
       "corrupt_stuck": {
         "title": "Shift data was damaged",
-        "body": "{file} could not be parsed nor renamed. Shift will not save anything until it is repaired or removed."
+        "body": "{file} is damaged and could not be set aside. Nothing will be saved until it is fixed."
       },
       "newer": {
         "title": "Shift data is from a newer version",
-        "body": "{file} was written by a newer version of Shift. Update the plugin; nothing will be saved until then."
+        "body": "{file} is from a newer Shift. Update the plugin; nothing will be saved until then."
       },
       "write": {
         "title": "Shift could not save data",

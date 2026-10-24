@@ -233,9 +233,10 @@ local function allPage(view: View, state: BalanceState, info: BalanceInfo): { Ui
   end
   table.insert(children, ui.column({ gap = 2 }, rows))
   if pages > 1 then
-    local function step(delta: number, glyph: string, enabled: boolean): UiNode
+    local function step(delta: number, glyph: string, enabled: boolean, tooltip: string): UiNode
       return ui.button({
         glyph = glyph,
+        tooltip = tooltip,
         variant = "ghost",
         controlSize = "sm",
         enabled = enabled,
@@ -246,9 +247,9 @@ local function allPage(view: View, state: BalanceState, info: BalanceInfo): { Ui
       })
     end
     table.insert(children, ui.row({ align = "center", justify = "center", gap = 8 }, {
-      step(-1, "chevron-left", state.listPage > 1),
+      step(-1, "chevron-left", state.listPage > 1, host.tr("panel.balance.previous_page")),
       ui.label({ text = host.tr("panel.balance.page", { page = state.listPage, pages = pages }), fontSize = 12, color = "on_surface_variant" }),
-      step(1, "chevron-right", state.listPage < pages),
+      step(1, "chevron-right", state.listPage < pages, host.tr("panel.balance.next_page")),
     }))
   end
   return children

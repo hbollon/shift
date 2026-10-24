@@ -554,7 +554,8 @@ On first run (no data file):
 
 ### 7.2 Visual language
 
-**Color roles** (no hex values anywhere in the plugin; alpha variants like `primary/0.15` for tints):
+**Color roles** (no hex values in the plugin, except the balance trend glyph of §7.4.4 and fallbacks when the
+host returns no color; alpha variants like `primary/0.15` for tints):
 
 | Meaning | Role |
 |---------|------|
@@ -1142,7 +1143,7 @@ listener {
 | Privacy | All data stays local. The only network call is the holidays API (disableable, offline-mode aware). No telemetry. Every process spawn and network call is listed in the README and in the community-plugins PR. |
 | Security | Spawned commands use the argv form (`runAsync({ … })`) whenever values are dynamic. `runStream` command strings only interpolate validated integers and the stream's own generated marker; `kill` only receives a process group read from that marker's line. No remote code. No obfuscation. |
 | Compatibility | `plugin_api = 32` (Noctalia ≥ 5.2.0). All compositors supported by Noctalia (idle requires `ext-idle-notify-v1` + swayidle). |
-| Theming | Zero hex colors. Verified on at least 3 palettes (default dark, default light, a high-contrast custom). |
+| Theming | No hex colors besides the exceptions of §7.2. Verified on at least 3 palettes (default dark, default light, and another builtin such as Gruvbox). |
 | i18n | 100 % of user-facing strings via `tr`. `en.json` complete. CI check that every key exists. |
 | Accessibility | §7.7. |
 | Code quality | `--!nonstrict` header. luau-lsp clean with `noctalia.d.luau`. Readable, commented where non-obvious (community review requirement). |

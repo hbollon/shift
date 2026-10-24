@@ -101,6 +101,7 @@ function Widgets.dateStepper(host: Types.Host, dateKey: string, onChange: (dateK
       variant = "ghost",
       controlSize = "sm",
       enabled = min == nil or dateKey > min,
+      tooltip = host.tr("panel.date.previous"),
       onClick = function()
         onChange(Time.addDays(dateKey, -1))
       end,
@@ -111,6 +112,7 @@ function Widgets.dateStepper(host: Types.Host, dateKey: string, onChange: (dateK
       variant = "ghost",
       controlSize = "sm",
       enabled = max == nil or dateKey < max,
+      tooltip = host.tr("panel.date.next"),
       onClick = function()
         onChange(Time.addDays(dateKey, 1))
       end,

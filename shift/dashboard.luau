@@ -597,8 +597,8 @@ local function timeline(sessions, absences, nowS: number): UiNode
   return ui.column({ gap = 4 }, {
     ui.row({ gap = 2 }, segments),
     ui.row({ justify = "space_between" }, {
-      ui.label({ text = clock(fromS), fontSize = 11, color = "on_surface_variant" }),
-      ui.label({ text = clock(toS), fontSize = 11, color = "on_surface_variant" }),
+      ui.label({ text = clock(fromS), fontSize = 12, color = "on_surface_variant" }),
+      ui.label({ text = clock(toS), fontSize = 12, color = "on_surface_variant" }),
     }),
   })
 end
@@ -712,13 +712,13 @@ local function previewStrip(snap: Snapshot): UiNode
     end
     -- Labels take their text's width: a fixed-width column aligns the rows.
     table.insert(rows, ui.row({ align = "center", gap = 6 }, {
-      ui.column({ width = PREVIEW_LABEL }, { ui.label({ text = names[day], fontSize = 11, color = "on_surface_variant" }) }),
+      ui.column({ width = PREVIEW_LABEL }, { ui.label({ text = names[day], fontSize = 12, color = "on_surface_variant" }) }),
       ui.row({ flexGrow = 1, gap = 1 }, cells),
     }))
   end
   local ticks = {}
   for _, hour in { "0", "6", "12", "18", "24" } do
-    table.insert(ticks, ui.label({ text = hour, fontSize = 10, color = "on_surface_variant" }))
+    table.insert(ticks, ui.label({ text = hour, fontSize = 12, color = "on_surface_variant" }))
   end
   table.insert(rows, ui.row({ gap = 6 }, {
     ui.column({ width = PREVIEW_LABEL }, {}),

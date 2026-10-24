@@ -352,6 +352,7 @@ options = [
 key             = "value"
 type            = "select"
 label_key       = "settings.value.label"
+description_key = "settings.value.description"
 default         = "worked"
 options = [
   { value = "worked", label_key = "settings.value.worked" },
