@@ -15,8 +15,11 @@ Track your working hours from the Noctalia shell: one-click check in / check out
 
 ## Requirements
 
+None of these is required: Shift tracks your time without them, with less automation.
+
 - `swayidle` (optional): detects when you are away from the keyboard. Without it, Shift still follows the session lock and system sleep, and shows a hint in the dashboard.
-- `gdbus` (from GLib, `libglib2.0-bin` on Debian and Ubuntu) and systemd-logind: lock and sleep detection. Without `gdbus`, Shift polls `loginctl` for the lock state.
+- `gdbus` (optional, from GLib: `libglib2.0-bin` on Debian and Ubuntu): session lock and sleep detection through systemd-logind.
+- `loginctl` (optional, from systemd or elogind): without `gdbus`, Shift polls it for the lock state; sleep is still detected when the computer wakes up.
 
 ## Usage
 

@@ -15,7 +15,7 @@ license      = "MIT"
 icon         = "briefcase"
 description  = "Track your work hours: one-click check in/out, smart automation, daily target and overtime balance."
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
-dependencies = ["swayidle"] # optional: idle detection
+dependencies = ["swayidle", "gdbus", "loginctl"] # all optional: idle, lock and sleep detection, lock fallback
 
 # --- Settings ------------------------------------------------------------------
 

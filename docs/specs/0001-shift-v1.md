@@ -1195,7 +1195,7 @@ license      = "MIT"
 icon         = "briefcase"
 description  = "Track your work hours: one-click check in/out, smart automation, daily target and overtime balance."
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
-dependencies = ["swayidle"]      # optional: idle detection (documented as optional in README)
+dependencies = ["swayidle", "gdbus", "loginctl"]  # all optional (documented as such in README)
 
 [[service]]
 id    = "core"
@@ -1332,3 +1332,4 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D40 | Dates (adjustment date, tracking start) are picked with a ‹ date › stepper, not typed. | No date format to learn or to parse per locale; distant dates are rare. |
 | D41 | The panel fits its fixed size without scrolling: tabs fixed under the header, stat tiles on Today only, a compact hero when the content would not fit, capped lists, and pages for forms and full lists. | Scrollbars appearing on tab changes felt cramped; tabs that never move are the clearest navigation (tiles used as tabs were not obvious); plugins cannot resize their panel at runtime (host-owned size, no `setSize`). |
 | D42 | Backups are directories of plain copies; the retention reuses the oldest backup directory for the new one. | The host can remove files but not directories. Plain copies keep a manual restore to a `cp`, unlike one bundled file per backup. |
+| D43 | Every external command is declared in `dependencies`, although none is required. | The community store asks for every command a plugin shells out to; the README says each one is optional and what is lost without it. |

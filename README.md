@@ -52,7 +52,7 @@ noctalia msg plugins enable hbollon/shift
 
 Then add the **Shift** widget to a bar, and optionally the **Shift** shortcut to the control center.
 
-**Optional tools**: [`swayidle`](https://github.com/swaywm/swayidle) for idle detection, and `gdbus` (GLib, `libglib2.0-bin` on Debian/Ubuntu) for lock and sleep detection. Shift works without them, with less automation.
+**Optional tools**: [`swayidle`](https://github.com/swaywm/swayidle) for idle detection, and `gdbus` (GLib, `libglib2.0-bin` on Debian/Ubuntu) or `loginctl` for lock and sleep detection. Shift works without them, with less automation.
 
 ## 🏁 Quick start
 
