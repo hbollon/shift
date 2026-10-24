@@ -4,11 +4,11 @@
 
 <br />
 
-[![CI](https://github.com/hbollon/shift/actions/workflows/ci.yml/badge.svg)](https://github.com/hbollon/shift/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/hbollon/shift?sort=semver&color=a5b4fc&label=release)](https://github.com/hbollon/shift/releases/latest) [![Noctalia](https://img.shields.io/badge/Noctalia-5.2%2B-7c80b4)](https://github.com/noctalia-dev/noctalia) [![License: MIT](https://img.shields.io/badge/license-MIT-fde68a)](LICENSE) [![Conventional Commits](https://img.shields.io/badge/commits-conventional-9bfece)](https://www.conventionalcommits.org) [![Stars](https://img.shields.io/github/stars/hbollon/shift?style=flat&color=fde68a&label=stars)](https://github.com/hbollon/shift/stargazers)
+[![CI](https://github.com/hbollon/shift/actions/workflows/ci.yml/badge.svg)](https://github.com/hbollon/shift/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/hbollon/shift?sort=semver&color=818cf8&label=release)](https://github.com/hbollon/shift/releases/latest) [![Noctalia store](https://img.shields.io/badge/Noctalia_store-Shift-7c80b4)](https://noctalia.dev/plugins/community/shift) [![Noctalia](https://img.shields.io/badge/Noctalia-5.2%2B-7c80b4)](https://github.com/noctalia-dev/noctalia) [![License: MIT](https://img.shields.io/badge/license-MIT-fde68a)](LICENSE) [![Conventional Commits](https://img.shields.io/badge/commits-conventional-9bfece)](https://www.conventionalcommits.org) [![Stars](https://img.shields.io/github/stars/hbollon/shift?style=flat&color=fde68a&label=stars)](https://github.com/hbollon/shift/stargazers)
 
 **Check in with one click. Let automation catch the rest. Always know where your overtime stands.**
 
-[Install](#-install) · [User guide](docs/user-guide.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[Install](#-install) · [Store page](https://noctalia.dev/plugins/community/shift) · [User guide](docs/user-guide.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -41,7 +41,7 @@ No account, no cloud, no timesheet: your data stays in a few JSON files on your 
 
 Shift needs [Noctalia](https://github.com/noctalia-dev/noctalia) **5.2.0 or newer**.
 
-**From the plugin store**: open Noctalia's settings → *Plugins*, search for **Shift** and enable it.
+**From the plugin store**: open Noctalia's settings → *Plugins*, search for **Shift** and enable it. See its [store page](https://noctalia.dev/plugins/community/shift).
 
 **From this repository** (latest release, before it reaches the store):
 
@@ -83,6 +83,7 @@ The [user guide](docs/user-guide.md) covers the rest: editing days, the balance,
 | | |
 | --- | --- |
 | [User guide](docs/user-guide.md) | How to use Shift, from the first check-in to the overtime balance. |
+| [Store page](https://noctalia.dev/plugins/community/shift) | Shift in the Noctalia plugin store. |
 | [Plugin page](shift/README.md) | Entries, settings, IPC, and every file, process and network call (as shown in the store). |
 | [Changelog](CHANGELOG.md) | What changed in each release. |
 | [Specification](docs/specs/0001-shift-v1.md) | Behavior, UX, architecture and the decisions behind them. |
