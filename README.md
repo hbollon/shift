@@ -1,4 +1,6 @@
-# Shift
+<p align="center">
+  <img src="docs/assets/shift-banner.png" alt="Shift — Track your working hours from your Noctalia desktop" />
+</p>
 
 **Track your working hours from your Noctalia desktop.** One-click check in / check out, a live daily counter against
 your contract, smart and fully configurable automation (activity, session lock, sleep, schedule), and an overtime
