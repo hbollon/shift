@@ -879,6 +879,7 @@ unit-testable with the standalone `luau` CLI.
 | `lib/totals.luau` | ✓ | Settled balance kept by month: computed again by month on changes, spread over calls (§9.4) |
 | `lib/automation.luau` | ✓ | Reducer `(state, event, config, now) → (state', effects)` for check-in/out, absences, overrides, rollover |
 | `lib/store.luau` | – | Load/save, atomic writes, schema migrations, backups |
+| `lib/backups.luau` | – | Daily and monthly backups, retention by reuse (§10.1) |
 | `lib/signals/stream.luau` | – | Long-lived command wrapper: process group, exit detection, restarts with backoff, stop |
 | `lib/signals/idle.luau` | – | swayidle stream lifecycle, external backend |
 | `lib/signals/logind.luau` | – | Session path resolution, gdbus monitor parsing, loginctl polling fallback |
@@ -1005,11 +1006,14 @@ backups/monthly/YYYY-MM/     # first daily backup of each month, 12 most recent 
 Per-year ledgers keep writes small and bounded. Pending absences stay in `state.json` until resolved, like the open
 session until check-out (D33); a resolved absence moves to the ledger with its status.
 
-**Backups.** Once per day, on the first tick of a new workday, the service copies **all** data files (`state.json`,
-`balance.json`, every `ledger/*.json`) into `backups/daily/<date>/`. The first daily backup of a month is also kept
-in `backups/monthly/<YYYY-MM>/`. Retention: 30 daily + 12 monthly (D28), pruned after each backup, about 10 MB at
-most. Holidays and the ring cache are not backed up (they can be regenerated). A backup is also taken before any
-schema migration, whatever the date.
+**Backups.** Once per day, on the first tick of a new workday (and on the first tick after a start, when that day
+has none yet), the service copies **all** data files (`state.json`, `balance.json`, every `ledger/*.json`) as is into
+`backups/daily/<date>/`. The first daily backup of a month is also kept in `backups/monthly/<YYYY-MM>/`. Retention:
+30 daily + 12 monthly (D28), about 10 MB at most. The host cannot remove directories, so the retention reuses the
+oldest backup directory for the new one (D42). A backup is written into `<name>.tmp/` and renamed once complete: a
+directory without the suffix is always a whole backup, and a leftover `.tmp/` is reused by the next one. Holidays and
+the ring cache are not backed up (they can be regenerated). A backup is also taken before any schema migration,
+whatever the date.
 
 ### 10.2 Schemas (v1)
 
@@ -1305,3 +1309,4 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D39 | In the day editor, pending absences apply at once and lock the sessions; the running session's start is editable; Save reviews a `needsReview` day. | No conflict between an absence cut and a draft; "I started at 8:30, checked in at 9:00" is the most common fix; reviewing is one click. |
 | D40 | Dates (adjustment date, tracking start) are picked with a ‹ date › stepper, not typed. | No date format to learn or to parse per locale; distant dates are rare. |
 | D41 | The panel fits its fixed size without scrolling: tabs fixed under the header, stat tiles on Today only, a compact hero when the content would not fit, capped lists, and pages for forms and full lists. | Scrollbars appearing on tab changes felt cramped; tabs that never move are the clearest navigation (tiles used as tabs were not obvious); plugins cannot resize their panel at runtime (host-owned size, no `setSize`). |
+| D42 | Backups are directories of plain copies; the retention reuses the oldest backup directory for the new one. | The host can remove files but not directories. Plain copies keep a manual restore to a `cp`, unlike one bundled file per backup. |

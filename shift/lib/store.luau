@@ -10,6 +10,7 @@
 -- - a file written by a newer schema, or one that exists but cannot be read, makes the
 --   whole store read-only rather than risk overwriting data it does not understand.
 
+local Backups = require("./backups.luau")
 local Time = require("./time.luau")
 local Types = require("./types.luau")
 
@@ -28,6 +29,7 @@ export type Store = typeof(setmetatable(
   {} :: {
     host: Host,
     dir: string?,
+    backups: Backups.Backups?,
     ledgers: { [number]: Ledger },
     readOnly: boolean,
     warned: { [string]: boolean },
@@ -37,7 +39,14 @@ export type Store = typeof(setmetatable(
 
 function Store.new(host: Host): Store
   local dir, err = host.pluginDataDir()
-  local self = setmetatable({ host = host, dir = dir, ledgers = {}, readOnly = false, warned = {} }, Store)
+  local self = setmetatable({
+    host = host,
+    dir = dir,
+    backups = dir and Backups.new(host, dir) or nil,
+    ledgers = {},
+    readOnly = false,
+    warned = {},
+  }, Store)
   if not dir then
     self.readOnly = true
     self:warn("unavailable", tostring(err))
@@ -128,6 +137,11 @@ end
 
 function Store.saveState(self: Store, state: State): boolean
   return self:write("state.json", state)
+end
+
+-- Takes the day's backup (spec §10.1) unless it exists.
+function Store.backup(self: Store, date: string): boolean
+  return self.backups ~= nil and self.backups.daily(date)
 end
 
 -- Tracking metadata; nil on first run.

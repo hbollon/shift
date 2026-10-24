@@ -92,7 +92,23 @@ function FakeHost.new(options)
     config[key] = value
   end
 
-  -- Filesystem (flat map path -> contents; directories are implicit) ----------
+  -- Filesystem (path -> contents, plus the set of directories) ----------------
+  -- Like the host: directories stay when emptied, can be renamed but not removed, and
+  -- writing a file creates its parents (the host needs mkdirAll first; tests skip it).
+
+  host.dirs = {}
+
+  local function addDirs(path)
+    local parent = string.match(path, "^(.+)/[^/]+$")
+    while parent and not host.dirs[parent] do
+      host.dirs[parent] = true
+      parent = string.match(parent, "^(.+)/[^/]+$")
+    end
+  end
+
+  local function under(path, root)
+    return string.sub(path, 1, #root + 1) == root .. "/"
+  end
 
   function host.pluginDataDir()
     return dataDir
@@ -107,21 +123,61 @@ function FakeHost.new(options)
   end
 
   function host.writeFile(path, contents)
+    if host.dirs[path] then
+      return false, "is a directory: " .. path
+    end
+    addDirs(path)
     host.files[path] = contents
     return true
   end
 
   function host.renameFile(from, to)
-    if host.files[from] == nil then
+    if host.files[from] ~= nil then
+      if host.dirs[to] then
+        return false, "is a directory: " .. to
+      end
+      addDirs(to)
+      host.files[to] = host.files[from]
+      host.files[from] = nil
+      return true
+    elseif not host.dirs[from] then
       return false, "no such file: " .. from
     end
-    host.files[to] = host.files[from]
-    host.files[from] = nil
+    if host.files[to] ~= nil then
+      return false, "not a directory: " .. to
+    end
+    for path in host.files do
+      if under(path, to) then
+        return false, "directory not empty: " .. to
+      end
+    end
+    local files, dirs = {}, {}
+    for path, contents in host.files do
+      if under(path, from) then
+        files[to .. string.sub(path, #from + 1)] = contents
+        host.files[path] = nil
+      end
+    end
+    for path in host.dirs do
+      if path == from or under(path, from) then
+        dirs[to .. string.sub(path, #from + 1)] = true
+        host.dirs[path] = nil
+      end
+    end
+    for path, contents in files do
+      host.files[path] = contents
+    end
+    for path in dirs do
+      host.dirs[path] = true
+    end
+    addDirs(to)
     return true
   end
 
   function host.removeFile(path)
-    if host.files[path] == nil then
+    if host.dirs[path] then
+      return false, "is a directory: " .. path
+    elseif host.files[path] == nil then
       return false, "no such file: " .. path
     end
     host.files[path] = nil
@@ -129,33 +185,37 @@ function FakeHost.new(options)
   end
 
   function host.fileExists(path)
-    if host.files[path] ~= nil then
-      return true
-    end
-    local prefix = path .. "/"
-    for existing in host.files do
-      if string.sub(existing, 1, #prefix) == prefix then
-        return true
-      end
-    end
-    return false
+    return host.files[path] ~= nil or host.dirs[path] == true
   end
 
-  function host.mkdirAll(_path)
+  function host.mkdirAll(path)
+    if host.files[path] ~= nil then
+      return false, "not a directory: " .. path
+    end
+    host.dirs[path] = true
+    addDirs(path)
     return true
   end
 
   function host.listDir(path)
-    local prefix = path .. "/"
+    if not host.dirs[path] then
+      return nil, "no such directory: " .. path
+    end
     local names, seen = {}, {}
-    for existing in host.files do
-      if string.sub(existing, 1, #prefix) == prefix then
-        local name = string.match(string.sub(existing, #prefix + 1), "^[^/]+")
+    local function add(existing)
+      if under(existing, path) then
+        local name = string.match(string.sub(existing, #path + 2), "^[^/]+")
         if name and not seen[name] then
           seen[name] = true
           table.insert(names, name)
         end
       end
+    end
+    for existing in host.files do
+      add(existing)
+    end
+    for existing in host.dirs do
+      add(existing)
     end
     table.sort(names)
     return names

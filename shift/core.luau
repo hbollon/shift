@@ -45,6 +45,7 @@ local store = Store.new(host)
 local settings = Model.readSettings(host.getConfig)
 local state: Types.State = store:loadState()
 local lastSaveS = 0
+local backupDay: string? = nil
 local lastPublishMinute: number? = nil
 
 local function nowS(): number
@@ -500,6 +501,14 @@ function update()
 
   if now - lastSaveS >= HEARTBEAT_S then
     saveState()
+  end
+  -- The first tick of each workday backs the data up (spec §10.1), after the rollover
+  -- has closed the previous one.
+  local workday = today()
+  if backupDay ~= workday then
+    backupDay = workday
+    saveState()
+    store:backup(workday)
   end
   -- Once a minute, so counters roll over to a new workday and week; on every tick while the
   -- settled balance is being computed.

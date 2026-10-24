@@ -135,6 +135,10 @@ The `core` service starts automatically when the plugin is enabled. Shift stores
 year), plus cached public holidays in `holidays/` and generated progress-ring images in `cache/`. Disabling or
 removing the plugin never deletes them.
 
+Every workday, Shift copies its data files into `backups/daily/<date>/` (the 30 most recent days are kept) and,
+on the first one of a month, into `backups/monthly/<month>/` (12 months kept). To go back to a backup, disable the
+plugin, copy the files from a backup directory over the ones in the data directory, then enable it again.
+
 Shift's only network access is the public holidays: `GET https://date.nager.at/api/v3/PublicHolidays/<year>/<country>`
 for each year from the tracking start to next year, once for past years and at most once a week for the current and
 next ones. It honors Noctalia's offline mode and uses the cache when offline. Turn *Public holidays* off to disable it.
