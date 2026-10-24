@@ -2,6 +2,13 @@
 
 All notable changes to Shift. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1](https://github.com/hbollon/shift/releases/tag/v1.0.1) - 2026-10-24
+
+### Bug fixes
+
+- Declare gdbus and loginctl as optional dependencies ([c8f8479](https://github.com/hbollon/shift/commit/c8f8479dc06b72907ef838d8fa291b18809d2761))
+
+
 ## [1.0.0](https://github.com/hbollon/shift/releases/tag/v1.0.0) - 2026-10-24
 
 ### Features
