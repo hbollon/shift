@@ -518,11 +518,17 @@ A workday can be marked as a **day off**: its target becomes `0`, exactly like a
 
 ### 6.9 Notifications (v1)
 
-- **Daily target reached**: once per workday, when `today.worked` crosses `today.target` (> 0) while working.
-  Title *"Daily target reached"*, body *"7:00 worked today · balance +4:35"*. Controlled by `notify_target_reached`.
-- **Pending absence**: one informational notification on return (§6.3.5). Controlled by `notify_pending_absence`.
-- **Suggestion** (assisted mode): one informational notification per window segment (§6.3.4). Controlled by
-  `notify_suggestions`.
+- **Daily target reached**: once per workday, when `today.worked` crosses `today.target` (> 0) while a session is
+  open. Title *"Daily target reached"*, body *"7:00 worked today · balance +4:35"* (the balance with today's delta;
+  left out while it is being computed). Controlled by `notify_target_reached`. The service compares worked time and
+  target at each publish (at least once a minute): a target already reached when the service starts, or reached by
+  editing the day while checked out, is not a crossing.
+- **Pending absence**: one informational notification on return (§6.3.5), *"You were away 42 min. Open Shift to
+  review."* Controlled by `notify_pending_absence`. An absence back to review through undo does not notify again.
+- **Suggestion** (assisted mode): one informational notification when a suggestion appears (§6.3.4), so once per
+  window segment. Controlled by `notify_suggestions`.
+- Notifications have no actions (the host does not support them): they point to the widget and the panel, where
+  the cards are.
 - Everything else is deferred to spec 0002.
 
 ### 6.10 First run / onboarding

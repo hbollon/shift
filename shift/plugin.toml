@@ -301,6 +301,31 @@ default         = ""
 advanced        = true
 visible_when    = { key = "holidays_enabled", values = ["true"] }
 
+# Notifications (spec §6.9, §8.5).
+
+[[setting]]
+key             = "notify_target_reached"
+type            = "bool"
+label_key       = "settings.notify_target_reached.label"
+description_key = "settings.notify_target_reached.description"
+default         = true
+
+[[setting]]
+key             = "notify_pending_absence"
+type            = "bool"
+label_key       = "settings.notify_pending_absence.label"
+description_key = "settings.notify_pending_absence.description"
+default         = true
+visible_when    = { key = "automation", values = ["assisted", "automatic", "custom"] }
+
+[[setting]]
+key             = "notify_suggestions"
+type            = "bool"
+label_key       = "settings.notify_suggestions.label"
+description_key = "settings.notify_suggestions.description"
+default         = true
+visible_when    = { key = "automation", values = ["assisted", "custom"] }
+
 # --- Entries -------------------------------------------------------------------
 
 [[service]]

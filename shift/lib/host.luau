@@ -36,6 +36,7 @@ function Host.new(): Types.Host
     commandExists = noctalia.commandExists,
     getenv = noctalia.getenv,
     log = noctalia.log,
+    notify = noctalia.notify,
     notifyError = noctalia.notifyError,
     tr = noctalia.tr,
     trp = noctalia.trp,

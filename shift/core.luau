@@ -7,6 +7,7 @@
 
 local Automation = require("./lib/automation.luau")
 local Commands = require("./lib/commands.luau")
+local Format = require("./lib/format.luau")
 local Holidays = require("./lib/holidays.luau")
 local Host = require("./lib/host.luau")
 local Idle = require("./lib/signals/idle.luau")
@@ -47,6 +48,10 @@ local state: Types.State = store:loadState()
 local lastSaveS = 0
 local backupDay: string? = nil
 local lastPublishMinute: number? = nil
+-- Daily target notification (spec §6.9): whether today's worked time was under the target
+-- at the last publish (nil before the first one), and the workday already notified.
+local belowTarget: boolean? = nil
+local targetNotified: string? = nil
 
 local function nowS(): number
   return host.nowMs() // 1000
@@ -216,20 +221,44 @@ local function balanceSummary(): Types.BalanceSummary?
   return computed
 end
 
+-- Notifies once per workday when the worked time crosses the target during a session. A
+-- target already reached when the service starts, or reached by editing the day while
+-- checked out, is not a crossing.
+local function checkTarget(snap: Types.Snapshot, now: number)
+  local live = Model.live(snap, now * 1000)
+  local below = live.targetMs <= 0 or live.workedMs < live.targetMs
+  local crossed = belowTarget == true and not below
+  belowTarget = below
+  if not crossed or snap.status == "off" or targetNotified == snap.today.date then
+    return
+  end
+  targetNotified = snap.today.date
+  if not settings.notify.targetReached then
+    return
+  end
+  local fmt = settings.durationFormat
+  local worked = Format.duration(live.workedMs, fmt)
+  local body = host.tr("notifications.target.body", { worked = worked })
+  if snap.balance then
+    local balanceMs = snap.balance.settledMs + live.workedMs - live.targetMs
+    body = host.tr("notifications.target.body_balance", { worked = worked, balance = Format.signed(balanceMs, fmt) })
+  end
+  host.notify(host.tr("notifications.target.title"), body)
+end
+
 local function publish()
   local now = nowS()
   lastPublishMinute = now // 60
-  host.state.set(
-    SNAPSHOT_KEY,
-    Model.snapshot({
-      state = state,
-      nowS = now,
-      settings = settings,
-      book = book,
-      balance = balanceSummary(),
-      automation = automationInfo(now),
-    })
-  )
+  local snap = Model.snapshot({
+    state = state,
+    nowS = now,
+    settings = settings,
+    book = book,
+    balance = balanceSummary(),
+    automation = automationInfo(now),
+  })
+  host.state.set(SNAPSHOT_KEY, snap)
+  checkTarget(snap, now)
 end
 
 local function setBalance(next: Types.Balance)
@@ -311,6 +340,10 @@ local function apply(effects: { Types.Effect })
       saveState()
     elseif effect.type == "publish" then
       publish()
+    elseif effect.type == "notify" then
+      local key = "notifications." .. effect.kind
+      local duration = effect.ms and Format.short(host, effect.ms, settings.durationFormat)
+      host.notify(host.tr(key .. ".title"), host.tr(key .. ".body", { duration = duration }))
     end
   end
 end

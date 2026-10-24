@@ -186,6 +186,7 @@ export type Settings = {
   idleBackend: IdleBackend,
   window: { start: string, ["end"]: string, excludeHolidays: boolean, extraRules: { string } },
   holidays: { enabled: boolean, country: string, region: string }, -- spec §8.4, codes upper-cased
+  notify: { targetReached: boolean, pendingAbsence: boolean, suggestions: boolean }, -- spec §8.5
 }
 
 -- Holidays and days off, used by the window (lib/rules.luau).
@@ -289,6 +290,7 @@ export type Effect =
   | { type: "balance.save", balance: Balance }
   | { type: "state.save" }
   | { type: "publish" }
+  | { type: "notify", kind: "checkin" | "checkout" | "absence", ms: number? } -- spec §6.9
 
 export type Result = { ok: boolean, changed: boolean?, error: string? }
 
@@ -350,6 +352,7 @@ export type Host = {
   commandExists: (name: string) -> boolean,
   getenv: (name: string) -> string?,
   log: (message: string) -> (),
+  notify: (title: string, body: string?) -> (),
   notifyError: (title: string, body: string?) -> (),
   tr: (key: string, subst: { [string]: any }?) -> string,
   trp: (key: string, count: number, subst: { [string]: any }?) -> string,

@@ -140,6 +140,11 @@ function Model.readSettings(getConfig: (key: string) -> any): Settings
       country = code(getConfig("holiday_country")),
       region = code(getConfig("holiday_region")),
     },
+    notify = {
+      targetReached = getConfig("notify_target_reached") ~= false,
+      pendingAbsence = getConfig("notify_pending_absence") ~= false,
+      suggestions = getConfig("notify_suggestions") ~= false,
+    },
   }
 end
 

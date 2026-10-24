@@ -128,10 +128,6 @@
       "edit_settings": "Edit in settings",
       "swayidle": "Install swayidle to detect when you are away from the keyboard.",
       "dismiss": "Dismiss",
-      "minutes": {
-        "one": "{count} min",
-        "other": "{count} min"
-      },
       "needs_review": "{date} was closed automatically. Check its end time.",
       "review": "Review",
       "to_review": {
@@ -408,6 +404,18 @@
     "holiday_region": {
       "label": "Holiday region",
       "description": "Optional subdivision code for regional holidays, such as FR-67 or DE-BY."
+    },
+    "notify_target_reached": {
+      "label": "Notify when the daily target is reached",
+      "description": "Once a day, when your worked time reaches today’s target."
+    },
+    "notify_pending_absence": {
+      "label": "Notify about absences to review",
+      "description": "When you come back from an absence that asks whether it was work."
+    },
+    "notify_suggestions": {
+      "label": "Notify about suggestions",
+      "description": "When Shift suggests checking in or out, once per work-hours period."
     }
   },
   "errors": {
@@ -452,6 +460,31 @@
         "title": "Shift could not save data",
         "body": "Writing {file} failed. Recent changes may be lost if Noctalia stops."
       }
+    }
+  },
+  "format": {
+    "minutes": {
+      "one": "{count} min",
+      "other": "{count} min"
+    }
+  },
+  "notifications": {
+    "target": {
+      "title": "Daily target reached",
+      "body": "{worked} worked today",
+      "body_balance": "{worked} worked today · balance {balance}"
+    },
+    "absence": {
+      "title": "Were you working?",
+      "body": "You were away {duration}. Open Shift to review."
+    },
+    "checkin": {
+      "title": "Start your shift?",
+      "body": "You are within your work hours. Check in from the Shift widget or dashboard."
+    },
+    "checkout": {
+      "title": "Your work hours are over",
+      "body": "Check out from the Shift widget or dashboard."
     }
   }
 }

@@ -10,6 +10,8 @@
 --   { type = "ledger.addSession", date, session }      { type = "ledger.removeSession", date, id }
 --   { type = "ledger.setFlag", date, flag, value }     { type = "ledger.setDay", date, day }
 --   { type = "balance.save", balance }                 { type = "state.save" }   { type = "publish" }
+--   { type = "notify", kind, ms? }                     a new suggestion ("checkin", "checkout") or
+--                                                      absence to review ("absence", its length)
 --
 -- `result` is `{ ok = true, changed = bool }` or `{ ok = false, error = code }`. Commands
 -- are idempotent: a check-in while working is accepted and changes nothing, so a command
@@ -100,6 +102,16 @@ local NO_WINDOW: WindowProbe = {
 local function emit(s: Step, effect: Effect)
   table.insert(s.effects, effect)
   s.dirty = true
+end
+
+-- Sets a suggestion, with its one notification (spec §6.9): a suggestion lasts until the
+-- window segment ends, so each segment notifies once.
+local function suggest(s: Step, kind: "checkin" | "checkout", atS: number)
+  s.state.suggestion = { kind = kind, untilS = s.window.nextEdge(atS) }
+  s.dirty = true
+  if s.settings.notify.suggestions then
+    emit(s, { type = "notify", kind = kind })
+  end
 end
 
 local function isAway(presence: Types.Presence?): boolean
@@ -331,6 +343,9 @@ local function finishAbsence(s: Step, endS: number)
   local date = workdayOf(s, open.startS)
   if action == "ask" then
     insertPending(s, { id = id, date = date, startS = absence.startS, endS = endS, signals = absence.signals })
+    if settings.notify.pendingAbsence then
+      emit(s, { type = "notify", kind = "absence", ms = (endS - absence.startS) * 1000 })
+    end
   elseif action == "deduct" then
     -- Undone back to pending, like a decision of the user (§6.8.4).
     local pending = { id = id, date = date, startS = absence.startS, endS = endS, signals = absence.signals }
@@ -366,8 +381,7 @@ local function offerCheckin(s: Step, atS: number)
   if mode == "auto" then
     openSession(s, atS, "auto")
   elseif not (st.suggestion and st.suggestion.kind == "checkin") then
-    st.suggestion = { kind = "checkin", untilS = s.window.nextEdge(atS) }
-    s.dirty = true
+    suggest(s, "checkin", atS)
   end
 end
 
@@ -407,8 +421,7 @@ local function windowClosed(s: Step, edgeS: number)
   if mode == "auto" then
     checkOut(s, edgeS)
   else
-    st.suggestion = { kind = "checkout", untilS = s.window.nextEdge(edgeS) }
-    s.dirty = true
+    suggest(s, "checkout", edgeS)
   end
 end
 

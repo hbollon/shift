@@ -119,6 +119,9 @@ listener {
 | Public holidays | On | No target on public holidays. Fetched from date.nager.at (see Notes). |
 | Holiday country | from your locale | Two-letter country code, such as `FR`; empty reads it from `LC_TIME` / `LANG`. |
 | Holiday region | none | Advanced. A subdivision code for regional holidays, such as `FR-67` or `DE-BY`. |
+| Notify when the daily target is reached | On | Once a day, when your worked time reaches today's target. |
+| Notify about absences to review | On | When you come back from an absence that asks whether it was work. |
+| Notify about suggestions | On | *Assisted* or *Custom*: when Shift suggests checking in or out, once per work-hours period. |
 
 Each bar widget also has its own settings (middle-click the widget to open them):
 

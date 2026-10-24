@@ -84,6 +84,16 @@ function Format.workdays(workdays: { boolean }, names: { string }): string
   return table.concat(parts, ", ")
 end
 
+-- "42 min" under an hour, else a duration in the user's format: how long an absence
+-- lasted.
+function Format.short(host: Types.Host, ms: number, style: string?): string
+  local minutes = ms // 60000
+  if minutes < 60 then
+    return host.trp("format.minutes", minutes)
+  end
+  return Format.duration(ms, style)
+end
+
 -- Clock time in the user's 12/24 h preference (`[shell].time_format`).
 function Format.clock(host: Types.Host, epochS: number): string
   return host.formatTime(host.timeFormat(), epochS)

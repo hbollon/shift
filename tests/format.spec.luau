@@ -78,6 +78,15 @@ t.describe("format.workdays", function()
   end)
 end)
 
+t.describe("format.short", function()
+  t.it("counts minutes under an hour, else uses the duration format", function()
+    local host = FakeHost.new({ translations = { ["format.minutes.one"] = "{count} min", ["format.minutes.other"] = "{count} min" } })
+    t.expect(Format.short(host, 42 * M + 59 * S, "colon")).toBe("42 min")
+    t.expect(Format.short(host, 1 * M, "units")).toBe("1 min")
+    t.expect(Format.short(host, 75 * M, "units")).toBe("1h 15m")
+  end)
+end)
+
 t.describe("format.clock", function()
   t.it("uses the shell time format", function()
     local at = os.time({ year = 2026, month = 10, day = 9, hour = 12, min = 2 }) -- 14:02 in Paris

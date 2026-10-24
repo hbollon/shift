@@ -169,15 +169,6 @@ end
 
 -- Attention cards (spec §7.4.2) -------------------------------------------------------
 
--- "42 min" under an hour, else a duration in the user's format.
-local function shortDuration(ms: number, fmt: Types.DurationFormat): string
-  local minutes = ms // 60000
-  if minutes < 60 then
-    return host.trp("panel.attention.minutes", minutes)
-  end
-  return Format.duration(ms, fmt)
-end
-
 local smallButton = Widgets.smallButton
 
 local function card(glyph: string, text: string, actions: { UiNode }): UiNode
@@ -221,7 +212,7 @@ local function attentionCards(snap: Snapshot, nowS: number): { UiNode }
     local text = host.tr("panel.attention.away", {
       from = clock(absence.startS),
       to = clock(absence.endS),
-      duration = shortDuration((absence.endS - absence.startS) * 1000, fmt),
+      duration = Format.short(host, (absence.endS - absence.startS) * 1000, fmt),
     }) .. " · " .. host.tr("panel.attention.signal." .. absence.signal)
     table.insert(cards, card("clock-exclamation", text, {
       smallButton(host.tr("panel.attention.remove"), "ghost", function()
