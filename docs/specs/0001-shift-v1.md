@@ -878,8 +878,8 @@ unit-testable with the standalone `luau` CLI.
 | `lib/model.luau` | ✓ | Sessions/absences ops, invariants, counters, targets, balance, contract history |
 | `lib/totals.luau` | ✓ | Settled balance kept by month: computed again by month on changes, spread over calls (§9.4) |
 | `lib/automation.luau` | ✓ | Reducer `(state, event, config, now) → (state', effects)` for check-in/out, absences, overrides, rollover |
-| `lib/store.luau` | – | Load/save, atomic writes, schema migrations, backups |
-| `lib/backups.luau` | – | Daily and monthly backups, retention by reuse (§10.1) |
+| `lib/store.luau` | – | Load/save, atomic writes, schema migrations, restore of a damaged file |
+| `lib/backups.luau` | – | Daily, monthly and pre-migration backups, retention by reuse (§10.1) |
 | `lib/signals/stream.luau` | – | Long-lived command wrapper: process group, exit detection, restarts with backoff, stop |
 | `lib/signals/idle.luau` | – | swayidle stream lifecycle, external backend |
 | `lib/signals/logind.luau` | – | Session path resolution, gdbus monitor parsing, loginctl polling fallback |
@@ -1001,6 +1001,7 @@ holidays/FR-2026.json   # cached API responses
 cache/ring-*.svg        # generated rings (disposable)
 backups/daily/YYYY-MM-DD/    # full copy of all data files, 30 most recent kept
 backups/monthly/YYYY-MM/     # first daily backup of each month, 12 most recent kept
+backups/migration/YYYY-MM-DD-schema-N/  # full copy before migrating schema N files, never pruned
 ```
 
 Per-year ledgers keep writes small and bounded. Pending absences stay in `state.json` until resolved, like the open
@@ -1013,7 +1014,7 @@ has none yet), the service copies **all** data files (`state.json`, `balance.jso
 oldest backup directory for the new one (D42). A backup is written into `<name>.tmp/` and renamed once complete: a
 directory without the suffix is always a whole backup, and a leftover `.tmp/` is reused by the next one. Holidays and
 the ring cache are not backed up (they can be regenerated). A backup is also taken before any schema migration,
-whatever the date.
+whatever the date, into `backups/migration/`.
 
 ### 10.2 Schemas (v1)
 
@@ -1062,9 +1063,12 @@ whatever the date.
 ### 10.3 Integrity rules
 - **Atomic writes**: write `*.tmp` then `renameFile` onto the real file.
 - **Write ordering**: persist first, then publish the snapshot.
-- **Corruption**: on a JSON parse error the file is moved to `*.corrupt-<ts>`, the latest backup is restored, and the
-  user is warned once (`notifyError`).
-- **Migrations**: each file carries `schema`. `lib/store.luau` applies ordered migrations on load and backs up first.
+- **Corruption**: on a JSON parse error the file is moved to `*.corrupt-<ts>`, the newest backed-up copy that parses
+  (daily backups, then monthly ones) is put back, and the user is warned once (`notifyError`) with the backup's date.
+  Without one, Shift goes on without the file's contents.
+- **Migrations**: each file carries `schema`. `lib/store.luau` applies ordered migrations (schema n → n + 1) on load,
+  after a full backup taken once per run, while every file is still as it was. If that backup fails, or a step is
+  missing, the store becomes read-only.
 - **Uninstall/disable**: data is never deleted by the plugin (`onExit(…, "uninstall")` does nothing destructive).
   The README documents the data location for manual removal.
 

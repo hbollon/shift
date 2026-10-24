@@ -136,4 +136,72 @@ t.describe("store.integrity", function()
   end)
 end)
 
+
+t.describe("store.backups", function()
+  t.it("restores a damaged file from the newest backup that reads", function()
+    local host = FakeHost.new({ nowMs = NOW_MS, translations = { ["errors.store.restored.body"] = "{file} from {date}" } })
+    local store = Store.new(host)
+    store:saveBalance({ schema = 1, trackingStart = "2026-09-01", initialBalanceMin = 0 })
+    store:backup("2026-10-07")
+    store:saveBalance({ schema = 1, trackingStart = "2026-09-01", initialBalanceMin = 45 })
+    store:backup("2026-10-08")
+    host.files["/data/backups/daily/2026-10-08/balance.json"] = "{ damaged too"
+    host.files["/data/balance.json"] = "{ not json"
+
+    local reopened = Store.new(host)
+    t.expect(reopened:loadBalance().initialBalanceMin).toBe(0)
+    t.expect(host.files["/data/balance.json"]).toBe(host.files["/data/backups/daily/2026-10-07/balance.json"])
+    t.expect(host.files["/data/balance.json.corrupt-1791547320"]).toBe("{ not json")
+    t.expect(#host.notifications).toBe(1)
+    t.expect(host.notifications[1].body).toBe("balance.json from 2026-10-07")
+    t.expect(reopened.readOnly).toBe(false)
+  end)
+
+  t.it("migrates older files after a full backup", function()
+    local host = newHost()
+    host.writeFile("/data/state.json", '{"schema":1}')
+    host.writeFile("/data/ledger/2026.json", '{"schema":1,"days":{"2026-10-08":{"sessions":[]}}}')
+    local seen = {}
+    local store = Store.new(host, {
+      schema = 2,
+      migrations = {
+        [1] = function(doc, name)
+          table.insert(seen, name)
+          doc.migrated = true
+          return doc
+        end,
+      },
+    })
+    t.expect(store:loadState()).toEqual({ schema = 2, migrated = true })
+    t.expect(store:day("2026-10-08")).toEqual({ sessions = {} })
+    t.expect(seen).toEqual({ "state.json", "ledger/2026.json" })
+    t.expect(host.listDir("/data/backups/migration")).toEqual({ "2026-10-09-schema-1" })
+    t.expect(host.files["/data/backups/migration/2026-10-09-schema-1/ledger/2026.json"]).toBe(
+      '{"schema":1,"days":{"2026-10-08":{"sessions":[]}}}'
+    )
+    t.expect(store:saveLedger(2026)).toBe(true)
+    t.expect(host.json.decode(host.files["/data/ledger/2026.json"]).schema).toBe(2)
+  end)
+
+  t.it("does not migrate without a backup", function()
+    local host = newHost()
+    local original = '{"schema":1}'
+    host.writeFile("/data/state.json", original)
+    local mkdirAll = host.mkdirAll
+    host.mkdirAll = function(path)
+      if string.find(path, "migration", 1, true) then
+        return false, "read-only file system"
+      end
+      return mkdirAll(path)
+    end
+    local store = Store.new(host, { schema = 2, migrations = { [1] = function(doc)
+      return doc
+    end } })
+    t.expect(store:loadState()).toEqual({ schema = 2 })
+    t.expect(store.readOnly).toBe(true)
+    t.expect(store:saveState({ schema = 2 })).toBe(false)
+    t.expect(host.files["/data/state.json"]).toBe(original)
+  end)
+end)
+
 t.finish()

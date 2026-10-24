@@ -1,9 +1,10 @@
 --!nonstrict
--- Backups of the data files (spec §10.1, D28): every data file, copied as is into
+-- Backups of the data files (spec §10.1, §10.3, D28): every data file, copied as is into
 -- one directory per backup.
 --
 --   backups/daily/2026-10-24/      the first tick of each workday, 30 most recent kept
 --   backups/monthly/2026-10/       the first daily backup of each month, 12 most recent
+--   backups/migration/2026-10-24-schema-1/   before a schema migration, never pruned
 --
 -- The host can remove files but not directories, so the retention reuses the oldest
 -- backup directory for the new one instead of deleting it. A backup is written into
@@ -17,6 +18,11 @@ type Host = Types.Host
 export type Backups = {
   -- Takes the backup of a workday unless it exists, and the month's on its first one.
   daily: (date: string) -> boolean,
+  -- Full backup before migrating files of schema `schema`.
+  beforeMigration: (date: string, schema: number) -> boolean,
+  -- Backed-up copies of a data file, newest first: daily backups, then monthly ones.
+  -- `label` names the backup (its date or month).
+  copies: (name: string) -> { { label: string, path: string } },
 }
 
 local Backups = {}
@@ -143,6 +149,27 @@ function Backups.new(host: Host, dir: string): Backups
       return take(root .. "/monthly", month, Backups.KEEP.monthly)
     end
     return true
+  end
+
+  function backups.beforeMigration(date: string, schema: number): boolean
+    local name = string.format("%s-schema-%d", date, schema)
+    host.mkdirAll(root .. "/migration")
+    -- Taken earlier today, before a migration that did not complete: still the original.
+    return host.fileExists(root .. "/migration/" .. name) or take(root .. "/migration", name, nil)
+  end
+
+  function backups.copies(name: string): { { label: string, path: string } }
+    local found = {}
+    for _, kind in { "daily", "monthly" } do
+      local entries = list(root .. "/" .. kind)
+      for i = #entries, 1, -1 do
+        local path = string.format("%s/%s/%s/%s", root, kind, entries[i], name)
+        if not isTmp(entries[i]) and host.fileExists(path) then
+          table.insert(found, { label = entries[i], path = path })
+        end
+      end
+    end
+    return found
   end
 
   return backups

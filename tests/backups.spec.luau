@@ -111,4 +111,33 @@ t.describe("backups.daily", function()
   end)
 end)
 
+t.describe("backups.copies", function()
+  t.it("lists a file's copies newest first, daily then monthly", function()
+    local host = newHost()
+    local backups = Backups.new(host, "/data")
+    backups.daily("2026-09-30")
+    backups.daily("2026-10-01")
+    backups.daily("2026-10-02")
+    host.writeFile(ROOT .. "/daily/2026-10-03.tmp/state.json", "partial")
+    local labels = {}
+    for _, copy in backups.copies("state.json") do
+      table.insert(labels, copy.label)
+    end
+    t.expect(labels).toEqual({ "2026-10-02", "2026-10-01", "2026-09-30", "2026-10", "2026-09" })
+    t.expect(backups.copies("ledger/2027.json")).toEqual({})
+  end)
+end)
+
+t.describe("backups.beforeMigration", function()
+  t.it("keeps a full backup, once per day and schema", function()
+    local host = newHost()
+    local backups = Backups.new(host, "/data")
+    t.expect(backups.beforeMigration("2026-10-24", 1)).toBe(true)
+    t.expect(filesUnder(host, ROOT .. "/migration/2026-10-24-schema-1")).toEqual(ALL)
+    host.writeFile("/data/state.json", "migrated")
+    t.expect(backups.beforeMigration("2026-10-24", 1)).toBe(true)
+    t.expect(host.files[ROOT .. "/migration/2026-10-24-schema-1/state.json"]).toBe('{"schema":1,"workday":"2026-10-24"}')
+  end)
+end)
+
 t.finish()

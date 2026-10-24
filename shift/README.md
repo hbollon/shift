@@ -136,8 +136,10 @@ year), plus cached public holidays in `holidays/` and generated progress-ring im
 removing the plugin never deletes them.
 
 Every workday, Shift copies its data files into `backups/daily/<date>/` (the 30 most recent days are kept) and,
-on the first one of a month, into `backups/monthly/<month>/` (12 months kept). To go back to a backup, disable the
-plugin, copy the files from a backup directory over the ones in the data directory, then enable it again.
+on the first one of a month, into `backups/monthly/<month>/` (12 months kept). If a file is damaged, Shift sets it
+aside with a `.corrupt` suffix, restores the newest backup that reads, and tells you its date. To go back to a
+backup yourself, disable the plugin, copy the files from a backup directory over the ones in the data directory,
+then enable it again.
 
 Shift's only network access is the public holidays: `GET https://date.nager.at/api/v3/PublicHolidays/<year>/<country>`
 for each year from the tracking start to next year, once for past years and at most once a week for the current and

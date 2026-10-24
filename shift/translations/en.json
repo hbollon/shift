@@ -432,6 +432,14 @@
         "title": "Shift data was damaged",
         "body": "{file} could not be parsed and was renamed with a .corrupt suffix. Shift continues without its contents."
       },
+      "restored": {
+        "title": "Shift data was restored",
+        "body": "{file} was damaged and has been restored from the backup of {date}. Changes made since then are lost; the damaged file was kept with a .corrupt suffix."
+      },
+      "migration": {
+        "title": "Shift cannot update its data",
+        "body": "{file} is from an older version of Shift and could not be backed up before its update. Nothing will be saved until this is fixed."
+      },
       "corrupt_stuck": {
         "title": "Shift data was damaged",
         "body": "{file} could not be parsed nor renamed. Shift will not save anything until it is repaired or removed."
