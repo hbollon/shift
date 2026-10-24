@@ -1,8 +1,10 @@
 # Shift
 
-Track your working hours from the Noctalia shell: one-click check in / check out, a live daily counter against your
-contract, and an overtime balance you can adjust. Automation can suggest or do check-ins within your work hours, and
-asks what to do with the time you were away. Shift is under active development.
+![Shift logo](logo.png)
+
+Track your working hours from the Noctalia shell: one-click check in / check out, a live daily counter against your contract, and an overtime balance you can adjust. Automation can suggest or do check-ins within your work hours, and asks what to do with the time you were away.
+
+[Source code and issues](https://github.com/hbollon/shift) · [User guide](https://github.com/hbollon/shift/blob/main/docs/user-guide.md) · [Changelog](https://github.com/hbollon/shift/blob/main/CHANGELOG.md)
 
 ## Plugin
 
@@ -13,37 +15,26 @@ asks what to do with the time you were away. Shift is under active development.
 
 ## Requirements
 
-- `swayidle` (optional): detects when you are away from the keyboard. Without it, Shift still follows the session lock
-  and system sleep, and shows a hint in the dashboard.
-- `gdbus` (from GLib, `libglib2.0-bin` on Debian and Ubuntu) and systemd-logind: lock and sleep detection. Without
-  `gdbus`, Shift polls `loginctl` for the lock state.
+- `swayidle` (optional): detects when you are away from the keyboard. Without it, Shift still follows the session lock and system sleep, and shows a hint in the dashboard.
+- `gdbus` (from GLib, `libglib2.0-bin` on Debian and Ubuntu) and systemd-logind: lock and sleep detection. Without `gdbus`, Shift polls `loginctl` for the lock state.
 
 ## Usage
 
-- **Bar widget**: add `Shift` from the bar's Add-widget picker (or configure a widget with
-  `type = "hbollon/shift:bar"`). It shows your status, today's worked time and a progress ring toward your daily
-  target; hover it for the details.
+- **Bar widget**: add `Shift` from the bar's Add-widget picker (or configure a widget with `type = "hbollon/shift:bar"`). It shows your status, today's worked time and a progress ring toward your daily target; hover it for the details.
   - Left click: open the dashboard.
   - Right click: check in, or check out when working.
 - **Dashboard panel**: today's counter and target, the check in / check out button, and three tabs:
   - **Today**: this week's total, the balance and today's delta, then the day's timeline and sessions;
   - **History**: a week of bars against the target, or a month calendar; click a day to edit it;
-  - **Balance**: the balance until yesterday and its breakdown, adjustments (time off, corrections), and the tracking
-    start and initial balance.
+  - **Balance**: the balance until yesterday and its breakdown, adjustments (time off, corrections), and the tracking start and initial balance.
 
-  The day editor changes a day's sessions (times like `9:30`, `930`, `9h30` or `9.5`), including the start of the
-  running one, and marks days off (no target), ahead of time too. Cards at the top ask about absences, suggestions,
-  days closed automatically and days without sessions: such a day stays out of the balance until you review it (day
-  off, add a session, or not worked). The footer summarises automation, and its details show the signal sources and
-  this week's work hours. Recent actions can be undone for 10 minutes (header button or `Ctrl+Z`). It opens from the
-  bar widget or the control-center tile, or with:
+  The day editor changes a day's sessions (times like `9:30`, `930`, `9h30` or `9.5`), including the start of the running one, and marks days off (no target), ahead of time too. Cards at the top ask about absences, suggestions, days closed automatically and days without sessions: such a day stays out of the balance until you review it (day off, add a session, or not worked). The footer summarises automation, and its details show the signal sources and this week's work hours. Recent actions can be undone for 10 minutes (header button or `Ctrl+Z`). It opens from the bar widget or the control-center tile, or with:
 
   ```sh
   noctalia msg panel-toggle hbollon/shift:dashboard
   ```
 
-- **Control-center tile**: add `Shift` from Settings → Control Center shortcuts. Click it to check in or out;
-  right-click it to open the dashboard.
+- **Control-center tile**: add `Shift` from Settings → Control Center shortcuts. Click it to check in or out; right-click it to open the dashboard.
 - **IPC**, for keybinds and scripts:
 
   ```sh
@@ -60,27 +51,17 @@ asks what to do with the time you were away. Shift is under active development.
 
 ### Balance
 
-Your weekly hours are split evenly over your workdays (35 h over Monday–Friday is 7:00 a day). Public holidays and
-days off have no target; time worked on them is overtime. A change of contract applies from the day you make it, never
-to past days. The balance counts every day from the tracking start to yesterday, plus the initial balance and the
-adjustments; today's delta is shown apart until the day ends.
+Your weekly hours are split evenly over your workdays (35 h over Monday–Friday is 7:00 a day). Public holidays and days off have no target; time worked on them is overtime. A change of contract applies from the day you make it, never to past days. The balance counts every day from the tracking start to yesterday, plus the initial balance and the adjustments; today's delta is shown apart until the day ends.
 
 ### Automation
 
 Automation acts only within your work hours (the window), on your workdays:
 
-- **Check in / check out**: with the *Assisted* preset, Shift suggests checking in when you start using your computer
-  within your work hours, and checking out when they end. *Automatic* does it for you. A manual check-out holds
-  automatic check-ins until the end of the current work-hours period; a session started outside your work hours is
-  never closed by them.
-- **Absences**: when you come back after being inactive, with the screen locked or the computer asleep for at least
-  15 minutes, Shift asks whether that time was work (a meeting, a call) or should be removed. Removing it splits
-  your session: checked out when you left, checked in when you came back. Shorter breaks count as work.
-- **End of day**: a session still open when the workday ends (at 04:00 by default) is closed at your last activity,
-  and unreviewed absences count as work.
+- **Check in / check out**: with the *Assisted* preset, Shift suggests checking in when you start using your computer within your work hours, and checking out when they end. *Automatic* does it for you. A manual check-out holds automatic check-ins until the end of the current work-hours period; a session started outside your work hours is never closed by them.
+- **Absences**: when you come back after being inactive, with the screen locked or the computer asleep for at least 15 minutes, Shift asks whether that time was work (a meeting, a call) or should be removed. Removing it splits your session: checked out when you left, checked in when you came back. Shorter breaks count as work.
+- **End of day**: a session still open when the workday ends (at 04:00 by default) is closed at your last activity, and unreviewed absences count as work.
 
-Additional rules add or remove time from the work hours, one per line: `+` or `-`, then `*`, days (`mon-fri`,
-`sat,sun`), a date (`2026-12-24`) or a date range (`2026-12-24..2027-01-02`), and an optional time range:
+Additional rules add or remove time from the work hours, one per line: `+` or `-`, then `*`, days (`mon-fri`, `sat,sun`), a date (`2026-12-24`) or a date range (`2026-12-24..2027-01-02`), and an optional time range:
 
 ```text
 - * 12:00-13:30        lunch break
@@ -133,26 +114,16 @@ Each bar widget also has its own settings (middle-click the widget to open them)
 
 ## Notes
 
-The `core` service starts automatically when the plugin is enabled. Shift stores its data as JSON files in
-`~/.local/state/noctalia/plugins/data/hbollon/shift/` (`state.json`, `balance.json` and one `ledger/<year>.json` per
-year), plus cached public holidays in `holidays/` and generated progress-ring images in `cache/`. Disabling or
-removing the plugin never deletes them.
+The `core` service starts automatically when the plugin is enabled. Shift stores its data as JSON files in `~/.local/state/noctalia/plugins/data/hbollon/shift/` (`state.json`, `balance.json` and one `ledger/<year>.json` per year), plus cached public holidays in `holidays/` and generated progress-ring images in `cache/`. Disabling or removing the plugin never deletes them.
 
-Every workday, Shift copies its data files into `backups/daily/<date>/` (the 30 most recent days are kept) and,
-on the first one of a month, into `backups/monthly/<month>/` (12 months kept). If a file is damaged, Shift sets it
-aside with a `.corrupt` suffix, restores the newest backup that reads, and tells you its date. To go back to a
-backup yourself, disable the plugin, copy the files from a backup directory over the ones in the data directory,
-then enable it again.
+Every workday, Shift copies its data files into `backups/daily/<date>/` (the 30 most recent days are kept) and, on the first one of a month, into `backups/monthly/<month>/` (12 months kept). If a file is damaged, Shift sets it aside with a `.corrupt` suffix, restores the newest backup that reads, and tells you its date. To go back to a backup yourself, disable the plugin, copy the files from a backup directory over the ones in the data directory, then enable it again.
 
-Shift's only network access is the public holidays: `GET https://date.nager.at/api/v3/PublicHolidays/<year>/<country>`
-for each year from the tracking start to next year, once for past years and at most once a week for the current and
-next ones. It honors Noctalia's offline mode and uses the cache when offline. Turn *Public holidays* off to disable it.
+Shift's only network access is the public holidays: `GET https://date.nager.at/api/v3/PublicHolidays/<year>/<country>` for each year from the tracking start to next year, once for past years and at most once a week for the current and next ones. It honors Noctalia's offline mode and uses the cache when offline. Turn *Public holidays* off to disable it.
 
 Unless automation is set to Manual, the service runs these processes:
 
 - `swayidle -w timeout <minutes × 60> 'echo idle' resume 'echo active'`, for idle detection;
-- `gdbus monitor --system --dest org.freedesktop.login1`, and `gdbus call` once at startup to find the session and its
-  lock state; or `loginctl show-session <id> -p LockedHint` every 15 s when `gdbus` is missing;
+- `gdbus monitor --system --dest org.freedesktop.login1`, and `gdbus call` once at startup to find the session and its lock state; or `loginctl show-session <id> -p LockedHint` every 15 s when `gdbus` is missing;
 - `/bin/sh -c 'kill -TERM -- -<pid>'` to stop swayidle when its settings change.
 
 Noctalia stops them when the plugin is disabled or reloaded.

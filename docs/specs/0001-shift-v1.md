@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Spec** | 0001 — Shift v1 (core tracking, bar widget, panel, control-center tile) |
-| **Status** | Reviewed — 2026-10-09 |
+| **Status** | Implemented — v1.0.0, 2026-10-24 |
 | **Author** | Hugo Bollon (`hbollon`) |
 | **Created** | 2026-10-09 |
 | **Target** | Noctalia ≥ 5.2.0 · `plugin_api = 32` |
@@ -1161,6 +1161,8 @@ shift/                          # this repository (also usable as a Noctalia git
 ├── catalog.toml                # generated from shift/plugin.toml (scripts/catalog.py)
 ├── cliff.toml                  # git-cliff configuration
 ├── docs/
+│   ├── user-guide.md           # functional documentation for users
+│   ├── assets/                 # logo, banner, README screenshots
 │   ├── specs/0001-shift-v1.md
 │   └── spikes/                 # platform validation reports
 ├── shift/                      # the plugin — mirrors the community-plugins layout
@@ -1169,6 +1171,7 @@ shift/                          # this repository (also usable as a Noctalia git
 │   ├── lib/ …                  # §9.2
 │   ├── translations/en.json
 │   ├── README.md               # plugin page (follows community README_TEMPLATE.md)
+│   ├── logo.png                # 128 px logo shown by README.md
 │   └── thumbnail.webp          # 960×540, from the official thumbnail generator
 ├── tests/                      # *.spec.luau unit tests, testing framework, fake host
 ├── scripts/                    # pinned toolchain install, test runner, store validation, catalog, commit check,
@@ -1185,7 +1188,7 @@ shift/                          # this repository (also usable as a Noctalia git
 ```toml
 id           = "hbollon/shift"
 name         = "Shift"
-version      = "0.1.0"
+version      = "1.0.0"
 plugin_api   = 32
 author       = "hbollon"
 license      = "MIT"
@@ -1235,7 +1238,7 @@ declared settings against code.
 - Manual QA checklist: themes (light/dark/custom), horizontal/vertical bars, multi-monitor, suspend/resume,
   lock/unlock, offline.
 
-**Distribution** (from v0.1.0, end of M7 — D26)
+**Distribution** (from v1.0.0, end of M7 — D26)
 1. GitHub releases from this repo (semver, changelog). Users can add it as a git source. `release.yml` publishes a
    release either from the Actions tab (it derives or takes the version, runs `make prepare-release` to set it in
    `plugin.toml`, `catalog.toml` and `CHANGELOG.md`, runs the checks, commits and tags as github-actions[bot]), or
@@ -1254,7 +1257,7 @@ declared settings against code.
 | **M4 — Automation** | Rules DSL + preview, idle/logind/gap signals, absences + resolution, presets, rollover | All §12 reducer scenarios pass; live tests on suspend/lock/idle |
 | **M5 — History & balance** | Week/month views, day editor, missing-day review, day off, adjustments, contract history, holidays | Past-day editing round-trips; balance matches a hand-computed fixture |
 | **M6 — Backups** | Full daily backups (§10.1), retention pruning, backup before migrations, restore of a corrupt file from the latest backup (§10.3) | Backup taken on the first tick of a workday; retention verified on a fixture; a corrupt file is restored from the latest backup |
-| **M7 — Polish & release** | Notifications (§6.9), microcopy pass, a11y pass, README, thumbnail, v0.1.0 GitHub release, community-plugins PR | Community-plugins checklist satisfied; PR opened |
+| **M7 — Polish & release** | Notifications (§6.9), microcopy pass, a11y pass, README, thumbnail, v1.0.0 GitHub release, community-plugins PR | Community-plugins checklist satisfied; PR opened |
 
 ## 16. Risks and technical spikes
 
@@ -1312,7 +1315,7 @@ consequences are already folded into this spec (D29, D30, §6.3.2, §7.2, §9.3)
 | D23 | Missing days are excluded from the balance until the user reviews them (day off, add session, or confirm not worked). | The balance is never wrong because the PC was off or the plugin not running. |
 | D24 | Visual defaults: bar widget shows status glyph · worked time · small progress ring (ring hidden without a target, muted when off); panel attached to the bar, opening near the widget; hero counter shows discreet seconds; overtime drawn as a second ring lap in `tertiary`. | Glanceable and native-feeling by default. Separate elements stay legible at bar size (a glyph drawn inside the ring would be too small and busy); the glyph carries the status without relying on color. Every one is a per-user setting except the overtime rendering. |
 | D25 | Workdays are chosen with a `work_week` preset (Mon–Fri / Mon–Sat / Custom); the 7 per-day toggles appear only for Custom. | Uncluttered settings for the common case without limiting anyone. |
-| D26 | Publish to the community store at v0.1.0, together with the first GitHub release. | Early feedback; the store handles updates. |
+| D26 | Publish to the community store at v1.0.0, together with the first GitHub release. | The first release covers the whole v1 scope; the store handles updates. |
 | D27 | Project setup, tooling and CI form a dedicated milestone (M1) before any feature work. | Every feature PR is validated by CI from day one. |
 | D28 | Full daily backups of all data files, kept 30 days, plus one per month kept 12 months. | Lets the user go back far, with bounded disk usage (about 10 MB). |
 | D29 | The automation window is configured with typed settings (start, end, holidays excluded; days = contract workdays) plus an optional `extra_rules` DSL list for exceptions. | The native list editor cannot edit entries in place (spike S4); the everyday case must stay comfortable. |

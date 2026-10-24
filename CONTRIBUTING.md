@@ -80,6 +80,8 @@ shift/              the plugin, laid out exactly as in community-plugins
   translations/en.json
 tests/              *.spec.luau unit tests, lib/testing.luau, lib/fake_host.luau, lib/json.luau
 scripts/            toolchain, test runner, store validation, catalog generation, release preparation
+docs/user-guide.md  functional documentation for users
+docs/assets/        logo, banner and README screenshots
 docs/specs/         specifications
 docs/spikes/        platform validation reports
 spikes/             throwaway spike plugin (not shipped)
