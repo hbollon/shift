@@ -5,13 +5,13 @@ SHELL := /usr/bin/env bash
 LUAU_LSP := .tools/bin/luau-lsp
 LUAU_SOURCES = $(shell find shift tests -name '*.luau')
 
-.PHONY: help tools test analyze lint validate catalog catalog-check check dev-install dev-uninstall clean
+.PHONY: help tools test analyze lint validate catalog catalog-check check changelog prepare-release dev-install dev-uninstall clean
 
 # Keep output readable even with a global `make -j`.
 .NOTPARALLEL:
 
 help: ## Show available targets
-	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
 tools: ## Install the pinned toolchain into .tools/
 	@scripts/install-tools.sh
@@ -38,6 +38,12 @@ catalog-check: ## Fail if catalog.toml is out of date
 	@scripts/catalog.py --check
 
 check: test analyze validate catalog-check lint ## Run every check (what CI runs, plus lint)
+
+changelog: tools ## Show the changelog of the commits since the last release
+	@.tools/bin/git-cliff --unreleased --strip header 2>/dev/null
+
+prepare-release: tools ## Set the version, catalog and CHANGELOG.md for a release (VERSION=X.Y.Z)
+	@scripts/prepare-release.sh $(VERSION)
 
 dev-install: ## Run this checkout on the running Noctalia (source, enable, widget, tile)
 	@scripts/dev-install.py install

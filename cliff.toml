@@ -1,0 +1,46 @@
+# git-cliff configuration: CHANGELOG.md and the GitHub release notes, generated from the
+# Conventional Commits (CONTRIBUTING.md). Only user-facing types are listed.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to Shift. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
+"""
+body = """
+{%- macro remote_url() -%}
+  https://github.com/hbollon/shift
+{%- endmacro -%}
+{% if version %}
+## [{{ version | trim_start_matches(pat="v") }}]({{ self::remote_url() }}/releases/tag/{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}
+## Unreleased
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits -%}
+- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }} ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+# Blank lines left by the template tags.
+postprocessors = [{ pattern = "\n{3,}", replace = "\n\n" }]
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+filter_commits = true
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = ".*", skip = true },
+]
+
+[bump]
+# The first release, when no tag exists yet.
+initial_tag = "v1.0.0"
