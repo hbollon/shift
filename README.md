@@ -18,6 +18,8 @@ Shift is a work-hours tracker for the [Noctalia](https://github.com/noctalia-dev
 
 No account, no cloud, no timesheet: your data stays in a few JSON files on your machine.
 
+https://github.com/user-attachments/assets/3367f957-3394-459c-96b8-4eb957ca768d
+
 <p align="center">
   <img src="docs/assets/screenshots/dashboard.webp" alt="The Shift dashboard: today's counter, the week's history and the overtime balance" />
 </p>
