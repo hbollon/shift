@@ -2,6 +2,13 @@
 
 All notable changes to Shift. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.2](https://github.com/hbollon/shift/releases/tag/v1.0.2) - 2026-10-26
+
+### Bug fixes
+
+- Rename surface_variant and outline palette roles ([2547461](https://github.com/hbollon/shift/commit/25474619fe74596fd689e8e703f44ad2f67a19dd))
+
+
 ## [1.0.1](https://github.com/hbollon/shift/releases/tag/v1.0.1) - 2026-10-24
 
 ### Bug fixes

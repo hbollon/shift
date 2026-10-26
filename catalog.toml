@@ -3,12 +3,12 @@
 [[plugin]]
 id           = "hbollon/shift"
 name         = "Shift"
-version      = "1.0.1"
+version      = "1.0.2"
 author       = "hbollon"
 license      = "MIT"
 icon         = "briefcase"
 description  = "Track your work hours: one-click check in/out, smart automation, daily target and overtime balance."
 deprecated   = false
-plugin_api   = 32
+plugin_api   = 43
 tags         = ["bar", "panel", "shortcut", "service", "productivity", "time"]
 dependencies = ["swayidle", "gdbus", "loginctl"]
