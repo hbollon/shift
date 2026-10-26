@@ -8,16 +8,16 @@
 # Every download is pinned and checksum-verified. Re-running is a no-op when up to date.
 set -euo pipefail
 
-LUAU_VERSION="0.741"
-LUAU_SHA256="134dc762ad26232af83e43f98dec03ff6030dd3a4452f9408b9d50ccea025503"
+LUAU_VERSION="0.744"
+LUAU_SHA256="6506f0852c623aaffcb28494aac16c26dc04a269ea0e16cc0aafc8c8ac79f3ec"
 LUAU_LSP_VERSION="1.70.1"
 LUAU_LSP_SHA256="1a2ea1ae4f98f8946cefd970a4b54853e11ab4775e6932faa7f60cf920346567"
-# noctalia-dev/official-plugins commit providing noctalia.d.luau (plugin_api 32)
-OFFICIAL_PLUGINS_REV="d097eb5e197f5714bef80b2185cdf60bb4b8aae8"
-NOCTALIA_DEFS_SHA256="cdc8ce17a109ba45ddb47ce241326b95485b1e08222bb3e0943079f5d793beca"
+# noctalia-dev/official-plugins commit providing noctalia.d.luau (plugin_api 41)
+OFFICIAL_PLUGINS_REV="d696743c5e6718ed5bf6b4a4ef10d2636002d80c"
+NOCTALIA_DEFS_SHA256="903983aec7db27d7b6fe397003d0a158175ee2d05ab74bf44abb4e76738b97dc"
 # noctalia-dev/community-plugins commit providing the store validator
-COMMUNITY_PLUGINS_REV="453e711cd2a4dc45edff695024e68e0bd704d183"
-VALIDATOR_SHA256="e34c6c7f10e9cf545d937f9e9ee027ec7d54cd6f508b0a9faf00a764b2e72245"
+COMMUNITY_PLUGINS_REV="63150dc53560297140164083b4d14d4aaaf59bc8"
+VALIDATOR_SHA256="846a44f4741350748d00f597c50295e870c165431acd310ae17f4eb21ec8abda"
 GIT_CLIFF_VERSION="2.14.2"
 GIT_CLIFF_SHA256="24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4"
 
